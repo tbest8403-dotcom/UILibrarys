@@ -74,7 +74,7 @@ Player:CreateTextbox({
 
 local Library = {}
 Library.__index = Library
-Library.Version = "1.0.1"
+Library.Version = "1.0.2"
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -1515,11 +1515,37 @@ function Library:CreateWindow(Options)
         AnimateButton(GetKey)
 
         GetKey.MouseButton1Click:Connect(function()
-            Window:Notify({
-                Title = "Key Link",
-                Content = tostring(Discord),
-                Duration = 4
-            })
+            local Link = tostring(Discord)
+
+            local Copied = false
+
+            if typeof(setclipboard) == "function" then
+                local Success = pcall(function()
+                    setclipboard(Link)
+                end)
+
+                Copied = Success
+            elseif typeof(toclipboard) == "function" then
+                local Success = pcall(function()
+                    toclipboard(Link)
+                end)
+
+                Copied = Success
+            end
+
+            if Copied then
+                Window:Notify({
+                    Title = "Copied",
+                    Content = "Discord link copied to clipboard.",
+                    Duration = 3
+                })
+            else
+                Window:Notify({
+                    Title = "Copy Not Supported",
+                    Content = "Your executor/client does not support clipboard copy. Link: " .. Link,
+                    Duration = 6
+                })
+            end
         end)
 
         local function Unlock()
