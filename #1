@@ -1,6 +1,6 @@
 --[[
 
-Dark Gray Pulse UI Library
+Dark Gray Pulse UI Library - Fixed Responsive Version
 Put this entire file on GitHub as a raw .txt or .lua file.
 
 Example LocalScript usage:
@@ -74,7 +74,7 @@ Player:CreateTextbox({
 
 local Library = {}
 Library.__index = Library
-Library.Version = "1.0.0"
+Library.Version = "1.0.1"
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -99,6 +99,42 @@ local Theme = {
     Good = Color3.fromRGB(95, 210, 150)
 }
 
+local TextRegistry = {}
+local CurrentTextScale = 1
+local TextClasses = {
+    TextLabel = true,
+    TextButton = true,
+    TextBox = true
+}
+
+local function ApplyResponsiveTextScale(Scale)
+    CurrentTextScale = math.clamp(Scale or 1, 0.82, 1.16)
+
+    for Index = #TextRegistry, 1, -1 do
+        local Data = TextRegistry[Index]
+        local Object = Data.Object
+
+        if Object and Object.Parent then
+            Object.TextSize = math.max(9, math.floor((Data.BaseSize * CurrentTextScale) + 0.5))
+        else
+            table.remove(TextRegistry, Index)
+        end
+    end
+end
+
+local function RegisterResponsiveText(Object, BaseSize)
+    if not Object or not BaseSize then
+        return
+    end
+
+    table.insert(TextRegistry, {
+        Object = Object,
+        BaseSize = BaseSize
+    })
+
+    Object.TextSize = math.max(9, math.floor((BaseSize * CurrentTextScale) + 0.5))
+end
+
 local function Tween(Object, Time, Properties, Style, Direction)
     local Info = TweenInfo.new(
         Time or 0.2,
@@ -116,6 +152,10 @@ local function Create(ClassName, Properties, Children)
 
     for Property, Value in pairs(Properties or {}) do
         Object[Property] = Value
+    end
+
+    if TextClasses[ClassName] and Properties and typeof(Properties.TextSize) == "number" then
+        RegisterResponsiveText(Object, Properties.TextSize)
     end
 
     for _, Child in ipairs(Children or {}) do
@@ -241,9 +281,7 @@ local function MakeResizable(Frame, Grip, MinSize, MaxSize)
             local NewWidth = math.clamp(StartSize.X + Delta.X, MinSize.X, MaxSize.X)
             local NewHeight = math.clamp(StartSize.Y + Delta.Y, MinSize.Y, MaxSize.Y)
 
-            Tween(Frame, 0.08, {
-                Size = UDim2.fromOffset(NewWidth, NewHeight)
-            })
+            Frame.Size = UDim2.fromOffset(NewWidth, NewHeight)
         end
     end)
 end
@@ -347,6 +385,8 @@ function Library:CreateWindow(Options)
     local NotificationList = List(NotificationHolder, Enum.FillDirection.Vertical, 8)
     NotificationList.HorizontalAlignment = Enum.HorizontalAlignment.Right
     NotificationList.VerticalAlignment = Enum.VerticalAlignment.Top
+
+    local ActiveNotification = nil
 
     local ReopenButton = Create("TextButton", {
         Name = "ReopenButton",
@@ -490,6 +530,23 @@ function Library:CreateWindow(Options)
     MakeDraggable(MainFrame, TopBar)
     MakeResizable(MainFrame, ResizeGrip, Vector2.new(330, 260), Vector2.new(760, 540))
 
+    local function UpdateResponsiveText()
+        local Size = MainFrame.AbsoluteSize
+
+        if Size.X <= 0 or Size.Y <= 0 then
+            return
+        end
+
+        local WidthScale = Size.X / DefaultWidth
+        local HeightScale = Size.Y / DefaultHeight
+        local NewScale = math.clamp(math.min(WidthScale, HeightScale), 0.82, 1.16)
+
+        ApplyResponsiveTextScale(NewScale)
+    end
+
+    MainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(UpdateResponsiveText)
+    task.defer(UpdateResponsiveText)
+
     task.spawn(function()
         while ScreenGui.Parent do
             Tween(MainStroke, 0.85, {
@@ -523,6 +580,11 @@ function Library:CreateWindow(Options)
 
         local Duration = Data.Duration or 4
 
+        if ActiveNotification and ActiveNotification.Parent then
+            ActiveNotification:Destroy()
+            ActiveNotification = nil
+        end
+
         local Card = Create("Frame", {
             Name = "Notification",
             Size = UDim2.fromOffset(0, 76),
@@ -532,6 +594,8 @@ function Library:CreateWindow(Options)
             ClipsDescendants = true,
             Parent = NotificationHolder
         })
+
+        ActiveNotification = Card
 
         Corner(Card, 12)
         Stroke(Card, Theme.Accent, 1, 0.35)
@@ -573,6 +637,10 @@ function Library:CreateWindow(Options)
         }, Enum.EasingStyle.Back)
 
         task.delay(Duration, function()
+            if ActiveNotification ~= Card then
+                return
+            end
+
             if Card and Card.Parent then
                 Tween(Card, 0.22, {
                     Size = UDim2.fromOffset(0, 76),
@@ -580,6 +648,11 @@ function Library:CreateWindow(Options)
                 })
 
                 task.wait(0.23)
+
+                if ActiveNotification == Card then
+                    ActiveNotification = nil
+                end
+
                 if Card then
                     Card:Destroy()
                 end
@@ -1075,7 +1148,7 @@ function Library:CreateWindow(Options)
 
                 local ValueLabel = Create("TextLabel", {
                     AnchorPoint = Vector2.new(1, 0),
-                    Position = UDim2.new(1, -28, 0, 0),
+                    Position = UDim2.new(1, -10, 0, 0),
                     Size = UDim2.new(0.55, -10, 0, 40),
                     BackgroundTransparency = 1,
                     Text = tostring(Selected),
@@ -1083,18 +1156,6 @@ function Library:CreateWindow(Options)
                     TextXAlignment = Enum.TextXAlignment.Right,
                     TextSize = 12,
                     Font = Enum.Font.Gotham,
-                    Parent = Header
-                })
-
-                local Arrow = Create("TextLabel", {
-                    AnchorPoint = Vector2.new(1, 0),
-                    Position = UDim2.new(1, -10, 0, 0),
-                    Size = UDim2.fromOffset(16, 40),
-                    BackgroundTransparency = 1,
-                    Text = "⌄",
-                    TextColor3 = Theme.MutedText,
-                    TextSize = 16,
-                    Font = Enum.Font.GothamBold,
                     Parent = Header
                 })
 
@@ -1121,7 +1182,6 @@ function Library:CreateWindow(Options)
                         Size = UDim2.new(1, -16, 0, Open and (#OptionsList * 31) or 0)
                     })
 
-                    Arrow.Text = Open and "⌃" or "⌄"
                 end
 
                 local function Set(Value, NoCallback)
