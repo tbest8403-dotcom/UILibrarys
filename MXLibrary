@@ -6,6 +6,7 @@ local GuiService = game:GetService("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local MX = {}
+MX.Version = "2.0.0"
 
 MX.Theme = {
 	Background = Color3.fromRGB(17, 17, 21),
@@ -1346,7 +1347,6 @@ function WindowMethods:Close(SkipNotify)
 	end
 
 	Tween(self.Main, 0.18, {
-		GroupTransparency = 1,
 		Size = UDim2.fromOffset(self.Size.X - 24, self.Size.Y - 18)
 	}, Enum.EasingStyle.Quad)
 
@@ -1358,10 +1358,8 @@ function WindowMethods:Close(SkipNotify)
 		self.Main.Visible = false
 		self.Logo.Visible = true
 		self.Logo.Size = UDim2.fromOffset(0, 0)
-		self.Logo.GroupTransparency = 1
 		Tween(self.Logo, 0.22, {
-			Size = UDim2.fromOffset(58, 38),
-			GroupTransparency = 0
+			Size = UDim2.fromOffset(58, 38)
 		})
 	end)
 end
@@ -1373,8 +1371,7 @@ function WindowMethods:Open(SkipNotify)
 
 	self.IsOpen = true
 	Tween(self.Logo, 0.14, {
-		Size = UDim2.fromOffset(0, 0),
-		GroupTransparency = 1
+		Size = UDim2.fromOffset(0, 0)
 	}, Enum.EasingStyle.Quad)
 
 	task.delay(0.14, function()
@@ -1385,10 +1382,8 @@ function WindowMethods:Open(SkipNotify)
 		self.Logo.Visible = false
 		self.Main.Visible = true
 		self.Main.Size = UDim2.fromOffset(self.Size.X - 24, self.Size.Y - 18)
-		self.Main.GroupTransparency = 1
 		Tween(self.Main, 0.22, {
-			Size = UDim2.fromOffset(self.Size.X, self.Size.Y),
-			GroupTransparency = 0
+			Size = UDim2.fromOffset(self.Size.X, self.Size.Y)
 		})
 
 		if SkipNotify ~= true then
@@ -1470,14 +1465,14 @@ function MX:CreateWindow(Options)
 	})
 	Window.ScreenGui = ScreenGui
 
-	local Main = Create("CanvasGroup", {
+	local Main = Create("Frame", {
 		Name = "Main",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = Options.Position or UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(RequestedSize.X, RequestedSize.Y),
 		BackgroundColor3 = Theme.Background,
 		BorderSizePixel = 0,
-		GroupTransparency = 0,
+		ClipsDescendants = true,
 		Parent = ScreenGui
 	})
 	Window.Main = Main
@@ -1489,15 +1484,6 @@ function MX:CreateWindow(Options)
 		Parent = Main
 	})
 	Window.Scale = Scale
-
-	Create("UIGradient", {
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 25, 30)),
-			ColorSequenceKeypoint.new(1, Theme.Background)
-		}),
-		Rotation = 90,
-		Parent = Main
-	})
 
 	local Header = Create("Frame", {
 		Name = "Header",
@@ -1615,14 +1601,14 @@ function MX:CreateWindow(Options)
 	PageTitle.Font = Enum.Font.GothamBold
 	Window.PageTitle = PageTitle
 
-	local Logo = Create("CanvasGroup", {
+	local Logo = Create("Frame", {
 		Name = "ReopenLogo",
 		AnchorPoint = Vector2.new(0.5, 0),
 		Position = UDim2.new(0.5, 0, 0, 12),
 		Size = UDim2.fromOffset(58, 38),
 		BackgroundColor3 = Theme.Background,
 		BorderSizePixel = 0,
-		GroupTransparency = 0,
+		ClipsDescendants = true,
 		Visible = false,
 		Parent = ScreenGui
 	})
