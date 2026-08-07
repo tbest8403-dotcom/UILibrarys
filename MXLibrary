@@ -6,7 +6,7 @@ local GuiService = game:GetService("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local MX = {}
-MX.Version = "3.0.0"
+MX.Version = "4.0.0"
 
 MX.Theme = {
 	Background = Color3.fromRGB(12, 12, 15),
@@ -430,8 +430,9 @@ function WindowMethods:AddTab(Options)
 		Size = UDim2.new(1, 0, 1, -37),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		ScrollBarThickness = 3,
-		ScrollBarImageColor3 = self.Theme.Accent,
+		ScrollBarThickness = 2,
+		ScrollBarImageColor3 = self.Theme.AccentDark,
+		ScrollBarImageTransparency = 0.12,
 		CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		Visible = false,
@@ -447,7 +448,7 @@ function WindowMethods:AddTab(Options)
 	Create("UIPadding", {
 		PaddingTop = UDim.new(0, 2),
 		PaddingBottom = UDim.new(0, 8),
-		PaddingRight = UDim.new(0, 4),
+		PaddingRight = UDim.new(0, 9),
 		Parent = Page
 	})
 
@@ -488,7 +489,7 @@ function TabMethods:AddSection(Options)
 	Options = NormalizeOptions(Options, "Section")
 
 	local Frame = Create("Frame", {
-		Size = UDim2.new(1, -4, 0, 0),
+		Size = UDim2.new(1, -9, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = self.Window.Theme.Surface,
 		BorderSizePixel = 0,
@@ -503,17 +504,22 @@ function TabMethods:AddSection(Options)
 		Parent = Frame
 	})
 
-	local Header = Create("TextLabel", {
+	local Header = Create("Frame", {
 		Size = UDim2.new(1, 0, 0, 34),
 		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		Text = "     " .. Options.Name,
-		TextColor3 = self.Window.Theme.Text,
-		TextSize = 11,
-		TextXAlignment = Enum.TextXAlignment.Left,
 		LayoutOrder = 0,
 		Parent = Frame
 	})
+
+	local HeaderText = MakeTextLabel(
+		Header,
+		Options.Name,
+		UDim2.new(1, -28, 1, 0),
+		UDim2.fromOffset(24, 0),
+		11,
+		self.Window.Theme.Text
+	)
+	HeaderText.Font = Enum.Font.GothamBold
 
 	local HeaderMarker = Create("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5),
@@ -1319,18 +1325,41 @@ end
 
 function SectionMethods:AddLabel(Options)
 	Options = NormalizeOptions(Options, "Label")
-	local Row = self:_Row(34)
+	local Row = self:_Row(40)
+
+	local Holder = Create("Frame", {
+		Position = UDim2.fromOffset(11, 6),
+		Size = UDim2.new(1, -22, 0, 28),
+		BackgroundColor3 = self.Window.Theme.Background,
+		BackgroundTransparency = 0.08,
+		BorderSizePixel = 0,
+		Parent = Row
+	})
+	AddCorner(Holder, 7)
+	AddStroke(Holder, self.Window.Theme.Stroke, 1, 0.26)
+
+	local StatusDot = Create("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromOffset(9, 14),
+		Size = UDim2.fromOffset(6, 6),
+		BackgroundColor3 = Options.DotColor or self.Window.Theme.Accent,
+		BorderSizePixel = 0,
+		Parent = Holder
+	})
+	AddCorner(StatusDot, 3)
+
 	local Label = MakeTextLabel(
-		Row,
+		Holder,
 		Options.Name,
-		UDim2.new(1, -26, 1, 0),
-		UDim2.fromOffset(13, 0),
+		UDim2.new(1, -30, 1, 0),
+		UDim2.fromOffset(23, 0),
 		11,
 		Options.Color or self.Window.Theme.Muted
 	)
 
 	local Control = {
-		Instance = Row
+		Instance = Row,
+		Dot = StatusDot
 	}
 
 	function Control:Set(Text)
@@ -1339,6 +1368,10 @@ function SectionMethods:AddLabel(Options)
 
 	function Control:Get()
 		return Label.Text
+	end
+
+	function Control:SetDotColor(Color)
+		StatusDot.BackgroundColor3 = Color
 	end
 
 	self.Controls[#self.Controls + 1] = Control
