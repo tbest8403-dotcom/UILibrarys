@@ -8,15 +8,15 @@ local LocalPlayer = Players.LocalPlayer
 local MX = {}
 
 MX.Theme = {
-	Background = Color3.fromRGB(15, 15, 18),
-	Surface = Color3.fromRGB(22, 22, 27),
-	SurfaceLight = Color3.fromRGB(31, 31, 38),
-	SurfaceHover = Color3.fromRGB(39, 39, 47),
-	Stroke = Color3.fromRGB(55, 55, 66),
-	Text = Color3.fromRGB(242, 242, 246),
-	Muted = Color3.fromRGB(150, 150, 164),
-	Accent = Color3.fromRGB(126, 91, 255),
-	AccentDark = Color3.fromRGB(82, 59, 176),
+	Background = Color3.fromRGB(17, 17, 21),
+	Surface = Color3.fromRGB(30, 30, 36),
+	SurfaceLight = Color3.fromRGB(48, 48, 57),
+	SurfaceHover = Color3.fromRGB(61, 61, 72),
+	Stroke = Color3.fromRGB(82, 82, 96),
+	Text = Color3.fromRGB(248, 248, 251),
+	Muted = Color3.fromRGB(188, 188, 201),
+	Accent = Color3.fromRGB(138, 105, 255),
+	AccentDark = Color3.fromRGB(92, 68, 190),
 	Success = Color3.fromRGB(73, 204, 128),
 	Warning = Color3.fromRGB(245, 173, 74),
 	Error = Color3.fromRGB(242, 83, 95)
@@ -494,7 +494,7 @@ function TabMethods:AddSection(Options)
 		Parent = self.Page
 	})
 	AddCorner(Frame, 10)
-	AddStroke(Frame, self.Window.Theme.Stroke, 1, 0.28)
+	AddStroke(Frame, self.Window.Theme.Stroke, 1, 0.08)
 
 	local Layout = Create("UIListLayout", {
 		Padding = UDim.new(0, 0),
@@ -518,7 +518,7 @@ function TabMethods:AddSection(Options)
 		Size = UDim2.new(1, -20, 0, 1),
 		Position = UDim2.fromOffset(10, 33),
 		BackgroundColor3 = self.Window.Theme.Stroke,
-		BackgroundTransparency = 0.45,
+		BackgroundTransparency = 0.18,
 		BorderSizePixel = 0,
 		LayoutOrder = 1,
 		Parent = Frame
@@ -573,6 +573,7 @@ function SectionMethods:AddButton(Options)
 		Parent = Row
 	})
 	AddCorner(Button, 8)
+	AddStroke(Button, self.Window.Theme.Stroke, 1, 0.22)
 
 	local Action = MakeTextLabel(
 		Button,
@@ -663,6 +664,7 @@ function SectionMethods:AddToggle(Options)
 		Parent = Row
 	})
 	AddCorner(Switch, 12)
+	local SwitchStroke = AddStroke(Switch, Value and self.Window.Theme.AccentDark or self.Window.Theme.Stroke, 1, 0.02)
 
 	local Knob = Create("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -701,6 +703,9 @@ function SectionMethods:AddToggle(Options)
 		UpdateFlag(self.Section.Window, Options.Flag, Value)
 		Tween(Switch, 0.18, {
 			BackgroundColor3 = Value and self.Section.Window.Theme.Accent or self.Section.Window.Theme.SurfaceLight
+		})
+		Tween(SwitchStroke, 0.18, {
+			Color = Value and self.Section.Window.Theme.AccentDark or self.Section.Window.Theme.Stroke
 		})
 		Tween(Knob, 0.18, {
 			Position = Value and UDim2.fromScale(0.74, 0.5) or UDim2.fromScale(0.26, 0.5)
@@ -774,6 +779,7 @@ function SectionMethods:AddSlider(Options)
 		Parent = Row
 	})
 	AddCorner(Track, 3)
+	AddStroke(Track, self.Window.Theme.Stroke, 1, 0.12)
 
 	local Fill = Create("Frame", {
 		Size = UDim2.fromScale(0, 1),
@@ -887,6 +893,7 @@ function SectionMethods:AddTextbox(Options)
 		Parent = Row
 	})
 	AddCorner(Box, 7)
+	AddStroke(Box, self.Window.Theme.Stroke, 1, 0.16)
 
 	Create("UIPadding", {
 		PaddingLeft = UDim.new(0, 9),
@@ -962,7 +969,7 @@ function SectionMethods:AddPlayerTextbox(Options)
 		Parent = Row
 	})
 	AddCorner(Box, 7)
-	local BoxStroke = AddStroke(Box, self.Window.Theme.Stroke, 1, 0.4)
+	local BoxStroke = AddStroke(Box, self.Window.Theme.Stroke, 1, 0.12)
 
 	Create("UIPadding", {
 		PaddingLeft = UDim.new(0, 9),
@@ -1095,6 +1102,7 @@ function SectionMethods:AddDropdown(Options)
 		Parent = Header
 	})
 	AddCorner(Choice, 7)
+	AddStroke(Choice, self.Window.Theme.Stroke, 1, 0.16)
 
 	local List = Create("Frame", {
 		Size = UDim2.new(1, 0, 0, 0),
@@ -1174,6 +1182,7 @@ function SectionMethods:AddDropdown(Options)
 				Parent = List
 			})
 			AddCorner(ItemButton, 7)
+			AddStroke(ItemButton, self.Section.Window.Theme.Stroke, 1, 0.24)
 
 			ItemButton.Activated:Connect(function()
 				Control:Set(Item, false, false)
@@ -1243,6 +1252,7 @@ function SectionMethods:AddKeybind(Options)
 		Parent = Row
 	})
 	AddCorner(KeyButton, 7)
+	AddStroke(KeyButton, self.Window.Theme.Stroke, 1, 0.16)
 
 	local Control = {
 		Section = self,
@@ -1472,7 +1482,7 @@ function MX:CreateWindow(Options)
 	})
 	Window.Main = Main
 	AddCorner(Main, 13)
-	AddStroke(Main, Theme.Stroke, 1, 0.1)
+	AddStroke(Main, Theme.Stroke, 1, 0)
 
 	local Scale = Create("UIScale", {
 		Scale = 1,
@@ -1482,7 +1492,7 @@ function MX:CreateWindow(Options)
 
 	Create("UIGradient", {
 		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 20, 24)),
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 25, 30)),
 			ColorSequenceKeypoint.new(1, Theme.Background)
 		}),
 		Rotation = 90,
@@ -1559,12 +1569,12 @@ function MX:CreateWindow(Options)
 		Position = UDim2.fromOffset(11, 60),
 		Size = UDim2.new(0, 145, 1, -71),
 		BackgroundColor3 = Theme.Surface,
-		BackgroundTransparency = 0.4,
+		BackgroundTransparency = 0.08,
 		BorderSizePixel = 0,
 		Parent = Main
 	})
 	AddCorner(TabPanel, 10)
-	AddStroke(TabPanel, Theme.Stroke, 1, 0.45)
+	AddStroke(TabPanel, Theme.Stroke, 1, 0.14)
 
 	local TabList = Create("ScrollingFrame", {
 		Position = UDim2.fromOffset(7, 7),
