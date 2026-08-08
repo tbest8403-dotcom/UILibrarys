@@ -6,7 +6,7 @@ local GuiService = game:GetService("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local MX = {}
-MX.Version = "4.0.0"
+MX.Version = "5.0.0"
 
 MX.Theme = {
 	Background = Color3.fromRGB(12, 12, 15),
@@ -1787,6 +1787,11 @@ function MX:CreateWindow(Options)
 	local DragInput
 	local DragStart
 	local StartPosition
+	local LogoDragging = false
+	local LogoDragInput
+	local LogoDragStart
+	local LogoStartPosition
+	local LogoSuppressOpen = false
 
 	Window:_Track(Header.InputBegan:Connect(function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
@@ -1802,6 +1807,21 @@ function MX:CreateWindow(Options)
 		end
 	end))
 
+	Window:_Track(LogoButton.InputBegan:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+			LogoDragging = true
+			LogoSuppressOpen = false
+			LogoDragStart = Input.Position
+			LogoStartPosition = Logo.Position
+		end
+	end))
+
+	Window:_Track(LogoButton.InputChanged:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch then
+			LogoDragInput = Input
+		end
+	end))
+
 	Window:_Track(UserInputService.InputChanged:Connect(function(Input)
 		if Dragging and Input == DragInput then
 			local Delta = Input.Position - DragStart
@@ -1812,12 +1832,52 @@ function MX:CreateWindow(Options)
 				StartPosition.Y.Offset + Delta.Y
 			)
 		end
+
+		if LogoDragging and Input == LogoDragInput then
+			local Delta = Input.Position - LogoDragStart
+			local Camera = workspace.CurrentCamera
+
+			if Delta.Magnitude >= 4 then
+				LogoSuppressOpen = true
+			end
+
+			if Camera then
+				local Viewport = Camera.ViewportSize
+				local StartX = LogoStartPosition.X.Scale * Viewport.X + LogoStartPosition.X.Offset
+				local StartY = LogoStartPosition.Y.Scale * Viewport.Y + LogoStartPosition.Y.Offset
+				local HalfWidth = math.max(Logo.AbsoluteSize.X, 58) * Logo.AnchorPoint.X
+				local LogoHeight = math.max(Logo.AbsoluteSize.Y, 38)
+				local PositionX = math.clamp(StartX + Delta.X, HalfWidth, Viewport.X - HalfWidth)
+				local PositionY = math.clamp(StartY + Delta.Y, 0, Viewport.Y - LogoHeight)
+				Logo.Position = UDim2.fromOffset(PositionX, PositionY)
+			else
+				Logo.Position = UDim2.new(
+					LogoStartPosition.X.Scale,
+					LogoStartPosition.X.Offset + Delta.X,
+					LogoStartPosition.Y.Scale,
+					LogoStartPosition.Y.Offset + Delta.Y
+				)
+			end
+		end
 	end))
 
 	Window:_Track(UserInputService.InputEnded:Connect(function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Dragging = false
 			DragInput = nil
+
+			if LogoDragging then
+				LogoDragging = false
+				LogoDragInput = nil
+
+				if LogoSuppressOpen then
+					task.delay(0.2, function()
+						if not LogoDragging then
+							LogoSuppressOpen = false
+						end
+					end)
+				end
+			end
 		end
 	end))
 
@@ -1841,6 +1901,10 @@ function MX:CreateWindow(Options)
 	end))
 
 	Window:_Track(LogoButton.Activated:Connect(function()
+		if LogoSuppressOpen then
+			return
+		end
+
 		Window:Open(false)
 	end))
 
