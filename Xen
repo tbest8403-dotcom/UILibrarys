@@ -86,17 +86,6 @@ local function OffsetPosition(Position, X, Y)
 	)
 end
 
-local function IsNearEdge(Frame, Position, Margin)
-	local RelativeX = Position.X - Frame.AbsolutePosition.X
-	local RelativeY = Position.Y - Frame.AbsolutePosition.Y
-	local Size = Frame.AbsoluteSize
-
-	return RelativeX <= Margin
-		or RelativeX >= Size.X - Margin
-		or RelativeY <= Margin
-		or RelativeY >= Size.Y - Margin
-end
-
 local function ResolveParent(Config)
 	if Config.Parent then
 		return Config.Parent
@@ -206,6 +195,10 @@ local function MakeResizable(Frame, Config)
 				DragStart = Input.Position
 				StartSize = Frame.AbsoluteSize
 				StartPosition = Frame.Position
+
+				if Config.OnResizeStart then
+					Config.OnResizeStart(ActiveEdge)
+				end
 			end
 		end)
 	end
@@ -266,6 +259,10 @@ local function MakeResizable(Frame, Config)
 
 			ActiveEdge = nil
 			ActiveInput = nil
+
+			if Config.OnResizeEnd then
+				Config.OnResizeEnd()
+			end
 		end
 	end)
 
@@ -1019,6 +1016,12 @@ function Window:_Build()
 		CanResize = function()
 			return not self.Minimized
 		end,
+		OnResizeStart = function()
+			self.MainResizing = true
+		end,
+		OnResizeEnd = function()
+			self.MainResizing = false
+		end,
 		OnResize = function()
 			if self.PanelOpen and self.Attached then
 				self.Panel.Size = UDim2.fromOffset(
@@ -1049,6 +1052,12 @@ function Window:_Build()
 		ZIndex = 45,
 		CanResize = function()
 			return self.PanelOpen and not self.Attached and not self.Minimized
+		end,
+		OnResizeStart = function()
+			self.PanelResizing = true
+		end,
+		OnResizeEnd = function()
+			self.PanelResizing = false
 		end,
 		OnResize = function()
 			self:_UpdateResponsiveLayout()
@@ -1087,9 +1096,8 @@ function Window:_Build()
 	for _, Connection in ipairs(MakeDraggable(
 		TopBar,
 		self.Main,
-		function(Input)
-			return not self.Minimized
-				and not IsNearEdge(self.Main, Input.Position, 9)
+		function()
+			return not self.Minimized and not self.MainResizing
 		end,
 		function(_, Delta)
 			if self.PanelOpen and self.Attached then
@@ -1226,9 +1234,8 @@ function Window:_BuildPanel()
 	for _, Connection in ipairs(MakeDraggable(
 		self.PanelTop,
 		self.Panel,
-		function(Input)
-			return self.PanelOpen and not self.Attached
-				and not IsNearEdge(self.Panel, Input.Position, 9)
+		function()
+			return self.PanelOpen and not self.Attached and not self.PanelResizing
 		end,
 		function()
 			-- Detached panels keep their own position.
@@ -1403,8 +1410,9 @@ function Window:SetMinimized(Minimized)
 	end
 
 	self.Minimized = Minimized == true
-	self.Main.Visible = not self.Minimized
-	self.Panel.Visible = self.PanelOpen and not self.Minimized
+	self.Main.Visible = not self.Minimized and not self.LauncherClosed
+	self.Panel.Visible = self.PanelOpen
+		and (not self.Minimized or not self.Attached)
 	self.MinimizedLabel.Visible = self.Minimized
 end
 
@@ -2111,6 +2119,8 @@ function Xen:CreateWindow(Config)
 		Attached = true,
 		ProfileVisible = true,
 		LauncherClosed = false,
+		MainResizing = false,
+		PanelResizing = false,
 		Minimized = false,
 		Destroyed = false,
 		ClosedPosition = UDim2.fromScale(0.5, 0.5),
@@ -2123,6 +2133,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.3.6"
+Xen.Version = "0.3.7"
 
 return Xen
