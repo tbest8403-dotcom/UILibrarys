@@ -425,6 +425,7 @@ function Window:_Build()
 		ZIndex = 3
 	}, self.Main)
 
+	AddCorner(Body, self.Radius)
 	self.Body = Body
 
 	local Sidebar = Create("Frame", {
@@ -434,6 +435,16 @@ function Window:_Build()
 		BorderSizePixel = 0,
 		ZIndex = 4
 	}, Body)
+
+	AddCorner(Sidebar, self.Radius)
+
+	Create("Frame", {
+		Name = "SquareTopCorners",
+		Size = UDim2.new(1, 0, 0, self.Radius),
+		BackgroundColor3 = COLORS.Sidebar,
+		BorderSizePixel = 0,
+		ZIndex = 4
+	}, Sidebar)
 
 	Create("Frame", {
 		Name = "Divider",
@@ -679,6 +690,16 @@ function Window:_Build()
 		BorderSizePixel = 0,
 		ZIndex = 4
 	}, Body)
+
+	AddCorner(Content, self.Radius)
+
+	Create("Frame", {
+		Name = "SquareTopCorners",
+		Size = UDim2.new(1, 0, 0, self.Radius),
+		BackgroundColor3 = COLORS.Surface,
+		BorderSizePixel = 0,
+		ZIndex = 4
+	}, Content)
 
 	self.ContentTitle = Create("TextLabel", {
 		Name = "ContentTitle",
@@ -958,6 +979,8 @@ function Window:_BuildPanel()
 		BorderSizePixel = 0,
 		ZIndex = 11
 	}, self.Panel)
+
+	AddCorner(self.PanelPages, self.Radius)
 
 	self:_Track(self.SplitButton.MouseButton1Click:Connect(function()
 		self:ToggleSplit()
@@ -1803,6 +1826,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.2.1"
+Xen.Version = "0.2.2"
 
 return Xen
