@@ -411,6 +411,16 @@ function Window:_AttachTooltip(Button, Text)
 		end
 	end))
 
+	self:_Track(Button.InputBegan:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			if self.Tooltip then
+				self.Tooltip.Visible = false
+			end
+		end
+	end))
+
 	self:_Track(Button.MouseButton1Click:Connect(function()
 		if self.Tooltip then
 			self.Tooltip.Visible = false
@@ -2133,6 +2143,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.3.7"
+Xen.Version = "0.3.8"
 
 return Xen
