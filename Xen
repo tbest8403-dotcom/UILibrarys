@@ -46,6 +46,10 @@ local function Create(ClassName, Properties, Parent)
 		Object[Property] = Value
 	end
 
+	if Properties and type(Properties.TextSize) == "number" then
+		Object:SetAttribute("XenBaseTextSize", Properties.TextSize)
+	end
+
 	Object.Parent = Parent
 	return Object
 end
@@ -140,6 +144,136 @@ local function MakeDraggable(Handle, Frame, CanDrag, OnMove)
 
 			Frame.Position = Position
 			OnMove(Position, Delta)
+		end
+	end)
+
+	return Connections
+end
+
+local function MakeResizable(Frame, Config)
+	local Connections = {}
+	local ActiveEdge = nil
+	local ActiveInput = nil
+	local DragStart = nil
+	local StartSize = nil
+	local StartPosition = nil
+
+	local Handles = {
+		{ "Left", "left", UDim2.new(0, 0, 0, 12), UDim2.new(0, 6, 1, -24), Vector2.new(0, 0) },
+		{ "Right", "right", UDim2.new(1, 0, 0, 12), UDim2.new(0, 6, 1, -24), Vector2.new(1, 0) },
+		{ "Top", "top", UDim2.new(0, 12, 0, 0), UDim2.new(1, -24, 0, 6), Vector2.new(0, 0) },
+		{ "Bottom", "bottom", UDim2.new(0, 12, 1, 0), UDim2.new(1, -24, 0, 6), Vector2.new(0, 1) },
+		{ "TopLeft", "top-left", UDim2.new(0, 0, 0, 0), UDim2.fromOffset(12, 12), Vector2.new(0, 0) },
+		{ "TopRight", "top-right", UDim2.new(1, 0, 0, 0), UDim2.fromOffset(12, 12), Vector2.new(1, 0) },
+		{ "BottomLeft", "bottom-left", UDim2.new(0, 0, 1, 0), UDim2.fromOffset(12, 12), Vector2.new(0, 1) },
+		{ "BottomRight", "bottom-right", UDim2.new(1, 0, 1, 0), UDim2.fromOffset(12, 12), Vector2.new(1, 1) }
+	}
+
+	for _, Definition in ipairs(Handles) do
+		local Handle = Create("Frame", {
+			Name = "Resize" .. Definition[1],
+			Position = Definition[3],
+			Size = Definition[4],
+			AnchorPoint = Definition[5],
+			BackgroundColor3 = COLORS.Muted,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Active = true,
+			ZIndex = Config.ZIndex or 30
+		}, Frame)
+
+		Connections[#Connections + 1] = Handle.MouseEnter:Connect(function()
+			if Config.CanResize(Definition[2]) then
+				Handle.BackgroundTransparency = 0.72
+			end
+		end)
+
+		Connections[#Connections + 1] = Handle.MouseLeave:Connect(function()
+			if ActiveEdge ~= Definition[2] then
+				Handle.BackgroundTransparency = 1
+			end
+		end)
+
+		Connections[#Connections + 1] = Handle.InputBegan:Connect(function(Input)
+			if not Config.CanResize(Definition[2]) then
+				return
+			end
+
+			if Input.UserInputType == Enum.UserInputType.MouseButton1
+				or Input.UserInputType == Enum.UserInputType.Touch then
+
+				ActiveEdge = Definition[2]
+				ActiveInput = Input
+				DragStart = Input.Position
+				StartSize = Frame.AbsoluteSize
+				StartPosition = Frame.Position
+				Handle.BackgroundTransparency = 0.48
+			end
+		end)
+	end
+
+	Connections[#Connections + 1] = UserInputService.InputChanged:Connect(function(Input)
+		if not ActiveEdge then
+			return
+		end
+
+		if Input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and Input.UserInputType ~= Enum.UserInputType.Touch then
+
+			return
+		end
+
+		local Delta = Input.Position - DragStart
+		local Width = StartSize.X
+		local Height = StartSize.Y
+		local ShiftX = 0
+		local ShiftY = 0
+
+		local Camera = workspace.CurrentCamera
+		local Viewport = Camera and Camera.ViewportSize or Vector2.new(1920, 1080)
+		local MaxWidth = math.max(320, math.min(Config.MaxWidth, Viewport.X - 20))
+		local MaxHeight = math.max(280, math.min(Config.MaxHeight, Viewport.Y - 20))
+		local MinWidth = math.min(Config.MinWidth, MaxWidth)
+		local MinHeight = math.min(Config.MinHeight, MaxHeight)
+
+		if string.find(ActiveEdge, "left", 1, true) then
+			Width = math.clamp(StartSize.X - Delta.X, MinWidth, MaxWidth)
+			ShiftX = (StartSize.X - Width) / 2
+		elseif string.find(ActiveEdge, "right", 1, true) then
+			Width = math.clamp(StartSize.X + Delta.X, MinWidth, MaxWidth)
+			ShiftX = (Width - StartSize.X) / 2
+		end
+
+		if string.find(ActiveEdge, "top", 1, true) then
+			Height = math.clamp(StartSize.Y - Delta.Y, MinHeight, MaxHeight)
+			ShiftY = (StartSize.Y - Height) / 2
+		elseif string.find(ActiveEdge, "bottom", 1, true) then
+			Height = math.clamp(StartSize.Y + Delta.Y, MinHeight, MaxHeight)
+			ShiftY = (Height - StartSize.Y) / 2
+		end
+
+		Frame.Size = UDim2.fromOffset(math.floor(Width), math.floor(Height))
+		Frame.Position = OffsetPosition(StartPosition, ShiftX, ShiftY)
+		Config.OnResize(Frame, ActiveEdge)
+	end)
+
+	Connections[#Connections + 1] = UserInputService.InputEnded:Connect(function(Input)
+		if not ActiveEdge then
+			return
+		end
+
+		if Input == ActiveInput
+			or Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			for _, Child in ipairs(Frame:GetChildren()) do
+				if string.sub(Child.Name, 1, 6) == "Resize" then
+					Child.BackgroundTransparency = 1
+				end
+			end
+
+			ActiveEdge = nil
+			ActiveInput = nil
 		end
 	end)
 
@@ -317,6 +451,47 @@ function Window:_CreateIconButton(Parent, Text, Position, Label)
 	return Button
 end
 
+function Window:_ScaleText(Container, Scale)
+	for _, Object in ipairs(Container:GetDescendants()) do
+		local BaseSize = Object:GetAttribute("XenBaseTextSize")
+
+		if BaseSize and Object:IsA("GuiObject") then
+			Object.TextSize = math.max(9, math.floor(BaseSize * Scale + 0.5))
+		end
+	end
+end
+
+function Window:_UpdateResponsiveLayout()
+	if self.Destroyed or not self.Main then
+		return
+	end
+
+	local MainSize = self.Main.AbsoluteSize
+	local WidthScale = MainSize.X / MAIN_WIDTH
+	local HeightScale = MainSize.Y / MAIN_HEIGHT
+	local MainTextScale = math.clamp(math.min(WidthScale, HeightScale), 0.82, 1.2)
+	local SidebarWidth = math.clamp(math.floor(218 * WidthScale), 180, 268)
+
+	if self.Sidebar and self.Content then
+		self.Sidebar.Size = UDim2.new(0, SidebarWidth, 1, 0)
+		self.Content.Position = UDim2.fromOffset(SidebarWidth, 0)
+		self.Content.Size = UDim2.new(1, -SidebarWidth, 1, 0)
+	end
+
+	self:_ScaleText(self.Main, MainTextScale)
+
+	if self.Panel then
+		local PanelSize = self.Panel.AbsoluteSize
+		local PanelTextScale = math.clamp(
+			math.min(PanelSize.X / PANEL_WIDTH, PanelSize.Y / MAIN_HEIGHT),
+			0.84,
+			1.2
+		)
+
+		self:_ScaleText(self.Panel, PanelTextScale)
+	end
+end
+
 function Window:_Build()
 	local Parent = ResolveParent(self.Config)
 	local Existing = Parent:FindFirstChild(self.GuiName)
@@ -435,6 +610,8 @@ function Window:_Build()
 		BorderSizePixel = 0,
 		ZIndex = 4
 	}, Body)
+
+	self.Sidebar = Sidebar
 
 	AddCorner(Sidebar, self.Radius)
 
@@ -691,6 +868,8 @@ function Window:_Build()
 		ZIndex = 4
 	}, Body)
 
+	self.Content = Content
+
 	AddCorner(Content, self.Radius)
 
 	Create("Frame", {
@@ -838,6 +1017,55 @@ function Window:_Build()
 	self:_AttachTooltip(RestoreButton, "Restore the Xen window")
 
 	self:_BuildPanel()
+
+	for _, Connection in ipairs(MakeResizable(self.Main, {
+		MinWidth = 560,
+		MinHeight = 380,
+		MaxWidth = 1180,
+		MaxHeight = 820,
+		ZIndex = 40,
+		CanResize = function()
+			return not self.Minimized
+		end,
+		OnResize = function()
+			if self.PanelOpen and self.Attached then
+				self.Panel.Size = UDim2.fromOffset(
+					self.Panel.Size.X.Offset,
+					self.Main.Size.Y.Offset
+				)
+				self.Panel.Position = self:_AttachedPanelPosition(self.Main.Position)
+				self.ClosedPosition = OffsetPosition(
+					self.Main.Position,
+					(self.Panel.Size.X.Offset + PANEL_GAP) / 2,
+					0
+				)
+			else
+				self.ClosedPosition = self.Main.Position
+			end
+
+			self:_UpdateResponsiveLayout()
+		end
+	})) do
+		self:_Track(Connection)
+	end
+
+	for _, Connection in ipairs(MakeResizable(self.Panel, {
+		MinWidth = 300,
+		MinHeight = 340,
+		MaxWidth = 680,
+		MaxHeight = 820,
+		ZIndex = 45,
+		CanResize = function()
+			return self.PanelOpen and not self.Attached and not self.Minimized
+		end,
+		OnResize = function()
+			self:_UpdateResponsiveLayout()
+		end
+	})) do
+		self:_Track(Connection)
+	end
+
+	self:_UpdateResponsiveLayout()
 
 	self:_Track(Close.MouseButton1Click:Connect(function()
 		self:Destroy()
@@ -1005,25 +1233,33 @@ function Window:_BuildPanel()
 end
 
 function Window:_AttachedMainPosition()
+	local PanelWidth = self.Panel and self.Panel.Size.X.Offset or PANEL_WIDTH
+
 	return OffsetPosition(
 		self.ClosedPosition,
-		-(PANEL_WIDTH + PANEL_GAP) / 2,
+		-(PanelWidth + PANEL_GAP) / 2,
 		0
 	)
 end
 
 function Window:_AttachedPanelPosition(MainPosition)
+	local MainWidth = self.Main and self.Main.Size.X.Offset or MAIN_WIDTH
+	local PanelWidth = self.Panel and self.Panel.Size.X.Offset or PANEL_WIDTH
+
 	return OffsetPosition(
 		MainPosition,
-		MAIN_WIDTH / 2 + PANEL_GAP + PANEL_WIDTH / 2,
+		MainWidth / 2 + PANEL_GAP + PanelWidth / 2,
 		0
 	)
 end
 
 function Window:_DetachedPanelPosition()
+	local MainWidth = self.Main and self.Main.Size.X.Offset or MAIN_WIDTH
+	local PanelWidth = self.Panel and self.Panel.Size.X.Offset or PANEL_WIDTH
+
 	return OffsetPosition(
 		self.Main.Position,
-		MAIN_WIDTH / 2 + 26 + PANEL_WIDTH / 2,
+		MainWidth / 2 + 26 + PanelWidth / 2,
 		10
 	)
 end
@@ -1051,13 +1287,29 @@ function Window:OpenPanel(PageObject)
 		self.Panel.Visible = true
 		self.PanelScale.Scale = 0.97
 
-		local MainTarget = self:_AttachedMainPosition()
-		local PanelTarget = self:_AttachedPanelPosition(MainTarget)
+		local MainTarget = self.Main.Position
+		local PanelTarget
+
+		if self.Attached then
+			self.Panel.Size = UDim2.fromOffset(
+				self.Panel.Size.X.Offset,
+				self.Main.Size.Y.Offset
+			)
+			MainTarget = self:_AttachedMainPosition()
+			PanelTarget = self:_AttachedPanelPosition(MainTarget)
+		else
+			PanelTarget = self:_DetachedPanelPosition()
+		end
 
 		self.Panel.Position = OffsetPosition(PanelTarget, 42, 0)
-		self:_Tween(self.Main, { Position = MainTarget })
+
+		if self.Attached then
+			self:_Tween(self.Main, { Position = MainTarget })
+		end
+
 		self:_Tween(self.Panel, { Position = PanelTarget })
 		self:_Tween(self.PanelScale, { Scale = 1 })
+		self:_UpdateResponsiveLayout()
 	else
 		self.PanelScale.Scale = 0.985
 		self:_Tween(self.PanelScale, { Scale = 1 }, 0.18)
@@ -1096,6 +1348,10 @@ function Window:ToggleSplit()
 	if self.Attached then
 		self.PanelModeLabel.Text = "Attached"
 		self.SplitButton.Text = "▥"
+		self.Panel.Size = UDim2.fromOffset(
+			self.Panel.Size.X.Offset,
+			self.Main.Size.Y.Offset
+		)
 		self:_Tween(self.Panel, {
 			Position = self:_AttachedPanelPosition(self.Main.Position)
 		})
@@ -1106,6 +1362,8 @@ function Window:ToggleSplit()
 			Position = self:_DetachedPanelPosition()
 		})
 	end
+
+	self:_UpdateResponsiveLayout()
 end
 
 function Window:SetMinimized(Minimized)
@@ -1188,6 +1446,7 @@ function Window:RegisterScript(Definition)
 	PageObject:_Build()
 	self:_UpdateCount()
 	self:_ApplySearch()
+	self:_UpdateResponsiveLayout()
 
 	if Definition.AutoSelect == true or #self.PageOrder == 1 then
 		PageObject:_SetSelected(false)
@@ -1575,6 +1834,8 @@ function Page:Load()
 				self:_SetState("Failed", "Loaded, but its Xen adapter failed: " .. tostring(AdapterError))
 			end
 		end
+
+		self.Window:_UpdateResponsiveLayout()
 	end)
 
 	return nil
@@ -1614,6 +1875,7 @@ function Page:AddSection(Name)
 	}, self.ControlsContainer)
 
 	self.Controls[#self.Controls + 1] = Label
+	self.Window:_UpdateResponsiveLayout()
 	return Label
 end
 
@@ -1647,6 +1909,7 @@ function Page:AddLabel(Config)
 	end
 
 	self.Controls[#self.Controls + 1] = Control
+	self.Window:_UpdateResponsiveLayout()
 	return Control
 end
 
@@ -1689,6 +1952,7 @@ function Page:AddButton(Config)
 	end
 
 	self.Controls[#self.Controls + 1] = Control
+	self.Window:_UpdateResponsiveLayout()
 	return Control
 end
 
@@ -1795,6 +2059,7 @@ function Page:AddToggle(Config)
 
 	Render(false)
 	self.Controls[#self.Controls + 1] = Control
+	self.Window:_UpdateResponsiveLayout()
 	return Control
 end
 
@@ -1826,6 +2091,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.2.2"
+Xen.Version = "0.3.0"
 
 return Xen
