@@ -1101,13 +1101,14 @@ function Window:_Build()
 end
 
 function Window:_BuildPanel()
-	self.Panel = Create("Frame", {
+	self.Panel = Create("CanvasGroup", {
 		Name = "ScriptPanel",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.new(0.5, 560, 0.5, 0),
 		Size = UDim2.fromOffset(PANEL_WIDTH, MAIN_HEIGHT),
 		BackgroundColor3 = COLORS.Panel,
 		BorderSizePixel = 0,
+		GroupTransparency = 0,
 		Visible = false,
 		ClipsDescendants = true,
 		ZIndex = 10
@@ -1128,6 +1129,17 @@ function Window:_BuildPanel()
 		Active = true,
 		ZIndex = 11
 	}, self.Panel)
+
+	AddCorner(self.PanelTop, self.Radius)
+
+	Create("Frame", {
+		Name = "SquareBottomCorners",
+		Position = UDim2.new(0, 0, 1, -self.Radius),
+		Size = UDim2.new(1, 0, 0, self.Radius),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		ZIndex = 11
+	}, self.PanelTop)
 
 	Create("Frame", {
 		AnchorPoint = Vector2.new(0, 1),
@@ -2072,6 +2084,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.3.2"
+Xen.Version = "0.3.4"
 
 return Xen
