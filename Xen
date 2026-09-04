@@ -1,0 +1,1738 @@
+--[[
+    Xen UI Library
+
+    A loadstring-ready Roblox/Luau interface for registering multiple remote
+    scripts. Scripts are fetched only when the user presses Load, and the
+    value returned by each script is kept as that entry's controller.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Xen = {}
+local Window = {}
+local Page = {}
+
+Window.__index = Window
+Page.__index = Page
+
+local MAIN_WIDTH = 760
+local MAIN_HEIGHT = 480
+local PANEL_WIDTH = 360
+local PANEL_GAP = 10
+
+local COLORS = {
+	Shell = Color3.fromRGB(29, 29, 26),
+	Sidebar = Color3.fromRGB(31, 31, 29),
+	Surface = Color3.fromRGB(23, 23, 23),
+	Panel = Color3.fromRGB(36, 36, 36),
+	Raised = Color3.fromRGB(45, 45, 42),
+	Hover = Color3.fromRGB(52, 52, 49),
+	Line = Color3.fromRGB(58, 58, 55),
+	Text = Color3.fromRGB(242, 242, 238),
+	Muted = Color3.fromRGB(164, 164, 158),
+	Success = Color3.fromRGB(111, 196, 150),
+	Warning = Color3.fromRGB(230, 177, 91),
+	Danger = Color3.fromRGB(224, 112, 112)
+}
+
+local function Create(ClassName, Properties, Parent)
+	local Object = Instance.new(ClassName)
+
+	for Property, Value in pairs(Properties or {}) do
+		Object[Property] = Value
+	end
+
+	Object.Parent = Parent
+	return Object
+end
+
+local function AddCorner(Object, Radius)
+	return Create("UICorner", {
+		CornerRadius = UDim.new(0, Radius)
+	}, Object)
+end
+
+local function AddStroke(Object, Color, Transparency)
+	return Create("UIStroke", {
+		Color = Color or COLORS.Line,
+		Thickness = 1,
+		Transparency = Transparency or 0
+	}, Object)
+end
+
+local function AddPadding(Object, Left, Right, Top, Bottom)
+	return Create("UIPadding", {
+		PaddingLeft = UDim.new(0, Left or 0),
+		PaddingRight = UDim.new(0, Right or 0),
+		PaddingTop = UDim.new(0, Top or 0),
+		PaddingBottom = UDim.new(0, Bottom or 0)
+	}, Object)
+end
+
+local function OffsetPosition(Position, X, Y)
+	return UDim2.new(
+		Position.X.Scale,
+		Position.X.Offset + X,
+		Position.Y.Scale,
+		Position.Y.Offset + Y
+	)
+end
+
+local function ResolveParent(Config)
+	if Config.Parent then
+		return Config.Parent
+	end
+
+	if type(gethui) == "function" then
+		local Success, HiddenUI = pcall(gethui)
+
+		if Success and HiddenUI then
+			return HiddenUI
+		end
+	end
+
+	return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local function MakeDraggable(Handle, Frame, CanDrag, OnMove)
+	local Dragging = false
+	local DragStart = nil
+	local StartPosition = nil
+	local ActiveInput = nil
+	local Connections = {}
+
+	Connections[#Connections + 1] = Handle.InputBegan:Connect(function(Input)
+		if not CanDrag() then
+			return
+		end
+
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			Dragging = true
+			DragStart = Input.Position
+			StartPosition = Frame.Position
+			ActiveInput = Input
+		end
+	end)
+
+	Connections[#Connections + 1] = Handle.InputEnded:Connect(function(Input)
+		if Input == ActiveInput then
+			Dragging = false
+			ActiveInput = nil
+		end
+	end)
+
+	Connections[#Connections + 1] = UserInputService.InputChanged:Connect(function(Input)
+		if not Dragging then
+			return
+		end
+
+		if Input.UserInputType == Enum.UserInputType.MouseMovement
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			local Delta = Input.Position - DragStart
+			local Position = OffsetPosition(StartPosition, Delta.X, Delta.Y)
+
+			Frame.Position = Position
+			OnMove(Position, Delta)
+		end
+	end)
+
+	return Connections
+end
+
+local function SafeDisconnect(Connection)
+	if Connection then
+		pcall(function()
+			Connection:Disconnect()
+		end)
+	end
+end
+
+local function ClearChildren(Container)
+	for _, Child in ipairs(Container:GetChildren()) do
+		if not Child:IsA("UIListLayout")
+			and not Child:IsA("UIPadding") then
+
+			Child:Destroy()
+		end
+	end
+end
+
+function Window:_Track(Connection)
+	self.Connections[#self.Connections + 1] = Connection
+	return Connection
+end
+
+function Window:_Tween(Object, Properties, Duration)
+	local Tween = TweenService:Create(
+		Object,
+		TweenInfo.new(
+			Duration or self.MotionSeconds,
+			Enum.EasingStyle.Quint,
+			Enum.EasingDirection.Out
+		),
+		Properties
+	)
+
+	Tween:Play()
+	return Tween
+end
+
+function Window:_SetButtonHover(Button, NormalColor, HoverColor)
+	self:_Track(Button.MouseEnter:Connect(function()
+		self:_Tween(Button, {
+			BackgroundColor3 = HoverColor
+		}, 0.12)
+	end))
+
+	self:_Track(Button.MouseLeave:Connect(function()
+		self:_Tween(Button, {
+			BackgroundColor3 = NormalColor
+		}, 0.12)
+	end))
+end
+
+function Window:_AttachTooltip(Button, Text)
+	local function ResolveText()
+		if type(Text) == "function" then
+			local Success, Result = pcall(Text)
+			return Success and tostring(Result or "") or ""
+		end
+
+		return tostring(Text or "")
+	end
+
+	self:_Track(Button.MouseEnter:Connect(function()
+		if self.Destroyed or not self.Tooltip then
+			return
+		end
+
+		local Label = ResolveText()
+
+		if Label == "" then
+			return
+		end
+
+		self.Tooltip.Text = Label
+		self.Tooltip.Visible = true
+
+		task.defer(function()
+			if not self.Tooltip or not self.Tooltip.Visible or not Button.Parent then
+				return
+			end
+
+			local Camera = workspace.CurrentCamera
+			local Viewport = Camera and Camera.ViewportSize or Vector2.new(1920, 1080)
+			local Width = self.Tooltip.AbsoluteSize.X
+			local Height = self.Tooltip.AbsoluteSize.Y
+			local CenterX = Button.AbsolutePosition.X + Button.AbsoluteSize.X / 2
+			local AboveY = Button.AbsolutePosition.Y - 7
+
+			CenterX = math.clamp(CenterX, Width / 2 + 8, Viewport.X - Width / 2 - 8)
+
+			if AboveY - Height < 8 then
+				self.Tooltip.AnchorPoint = Vector2.new(0.5, 0)
+				self.Tooltip.Position = UDim2.fromOffset(
+					CenterX,
+					Button.AbsolutePosition.Y + Button.AbsoluteSize.Y + 7
+				)
+			else
+				self.Tooltip.AnchorPoint = Vector2.new(0.5, 1)
+				self.Tooltip.Position = UDim2.fromOffset(CenterX, AboveY)
+			end
+		end)
+	end))
+
+	self:_Track(Button.MouseLeave:Connect(function()
+		if self.Tooltip then
+			self.Tooltip.Visible = false
+		end
+	end))
+
+	self:_Track(Button.MouseButton1Click:Connect(function()
+		if self.Tooltip then
+			self.Tooltip.Visible = false
+		end
+	end))
+end
+
+function Window:_CreateIconButton(Parent, Text, Position, Label)
+	local Button = Create("TextButton", {
+		Name = Label:gsub("%s+", ""),
+		Size = UDim2.fromOffset(30, 30),
+		Position = Position,
+		BackgroundColor3 = COLORS.Panel,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = Text,
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 14,
+		ZIndex = 12
+	}, Parent)
+
+	AddCorner(Button, 8)
+	self:_SetButtonHover(Button, COLORS.Panel, COLORS.Hover)
+	self:_AttachTooltip(Button, Label)
+	return Button
+end
+
+function Window:_Build()
+	local Parent = ResolveParent(self.Config)
+	local Existing = Parent:FindFirstChild(self.GuiName)
+
+	if Existing then
+		Existing:Destroy()
+	end
+
+	self.Gui = Create("ScreenGui", {
+		Name = self.GuiName,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = false,
+		DisplayOrder = self.Config.DisplayOrder or 1000,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	}, Parent)
+
+	self.Tooltip = Create("TextLabel", {
+		Name = "Tooltip",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(0, 0),
+		AutomaticSize = Enum.AutomaticSize.XY,
+		BackgroundColor3 = Color3.fromRGB(48, 48, 45),
+		BorderSizePixel = 0,
+		Text = "",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.Gotham,
+		TextSize = 11,
+		Visible = false,
+		ZIndex = 100
+	}, self.Gui)
+
+	AddCorner(self.Tooltip, 7)
+	AddStroke(self.Tooltip, COLORS.Line, 0.15)
+	AddPadding(self.Tooltip, 9, 9, 6, 6)
+
+	self.Main = Create("Frame", {
+		Name = "Main",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(MAIN_WIDTH, MAIN_HEIGHT),
+		BackgroundColor3 = COLORS.Surface,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		ZIndex = 2
+	}, self.Gui)
+
+	AddCorner(self.Main, self.Radius)
+	AddStroke(self.Main)
+
+	local TopBar = Create("Frame", {
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, 48),
+		BackgroundColor3 = COLORS.Shell,
+		BorderSizePixel = 0,
+		ZIndex = 4,
+		Active = true
+	}, self.Main)
+
+	Create("Frame", {
+		Name = "TopBarBottomSquare",
+		Position = UDim2.new(0, 0, 1, -12),
+		Size = UDim2.new(1, 0, 0, 12),
+		BackgroundColor3 = COLORS.Shell,
+		BorderSizePixel = 0,
+		ZIndex = 4
+	}, TopBar)
+
+	AddCorner(TopBar, self.Radius)
+
+	local Logo = Create("TextLabel", {
+		Name = "Logo",
+		Position = UDim2.fromOffset(14, 10),
+		Size = UDim2.fromOffset(28, 28),
+		BackgroundColor3 = self.Accent,
+		BorderSizePixel = 0,
+		Text = "X",
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		ZIndex = 6
+	}, TopBar)
+
+	AddCorner(Logo, 9)
+
+	Create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(52, 0),
+		Size = UDim2.new(1, -152, 1, 0),
+		BackgroundTransparency = 1,
+		Text = self.Title,
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 14,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 6
+	}, TopBar)
+
+	local Minimize = self:_CreateIconButton(
+		TopBar,
+		"—",
+		UDim2.new(1, -72, 0, 9),
+		"Minimize"
+	)
+
+	local Close = self:_CreateIconButton(
+		TopBar,
+		"×",
+		UDim2.new(1, -38, 0, 9),
+		"Close"
+	)
+
+	local Body = Create("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(0, 48),
+		Size = UDim2.new(1, 0, 1, -48),
+		BackgroundColor3 = COLORS.Surface,
+		BorderSizePixel = 0,
+		ZIndex = 3
+	}, self.Main)
+
+	self.Body = Body
+
+	local Sidebar = Create("Frame", {
+		Name = "Sidebar",
+		Size = UDim2.new(0, 218, 1, 0),
+		BackgroundColor3 = COLORS.Sidebar,
+		BorderSizePixel = 0,
+		ZIndex = 4
+	}, Body)
+
+	Create("Frame", {
+		Name = "Divider",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.new(0, 1, 1, 0),
+		BackgroundColor3 = COLORS.Line,
+		BorderSizePixel = 0,
+		ZIndex = 5
+	}, Sidebar)
+
+	Create("TextLabel", {
+		Name = "LibraryLabel",
+		Position = UDim2.fromOffset(14, 14),
+		Size = UDim2.new(1, -28, 0, 18),
+		BackgroundTransparency = 1,
+		Text = "SCRIPT LIBRARY",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 5
+	}, Sidebar)
+
+	local SearchFrame = Create("Frame", {
+		Name = "Search",
+		Position = UDim2.fromOffset(8, 39),
+		Size = UDim2.new(1, -16, 0, 34),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		ZIndex = 6
+	}, Sidebar)
+
+	AddCorner(SearchFrame, 9)
+	local SearchStroke = AddStroke(SearchFrame, COLORS.Line, 0.25)
+
+	Create("TextLabel", {
+		Name = "SearchIcon",
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.fromOffset(18, 34),
+		BackgroundTransparency = 1,
+		Text = "⌕",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 17,
+		ZIndex = 7
+	}, SearchFrame)
+
+	self.SearchBox = Create("TextBox", {
+		Name = "Input",
+		Position = UDim2.fromOffset(31, 0),
+		Size = UDim2.new(1, -39, 1, 0),
+		BackgroundTransparency = 1,
+		ClearTextOnFocus = false,
+		PlaceholderText = "Search scripts",
+		PlaceholderColor3 = COLORS.Muted,
+		Text = "",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.Gotham,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 7
+	}, SearchFrame)
+
+	self.ScriptList = Create("ScrollingFrame", {
+		Name = "Scripts",
+		Position = UDim2.fromOffset(8, 82),
+		Size = UDim2.new(1, -16, 1, -154),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = COLORS.Line,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ZIndex = 5
+	}, Sidebar)
+
+	AddPadding(self.ScriptList, 0, 0, 0, 6)
+	Create("UIListLayout", {
+		Padding = UDim.new(0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder
+	}, self.ScriptList)
+
+	self.NoSearchResults = Create("TextLabel", {
+		Name = "NoResults",
+		Size = UDim2.new(1, 0, 0, 52),
+		BackgroundTransparency = 1,
+		Text = "No supported scripts found",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 11,
+		TextWrapped = true,
+		Visible = false,
+		LayoutOrder = 1000000,
+		ZIndex = 6
+	}, self.ScriptList)
+
+	self:_Track(self.SearchBox.Focused:Connect(function()
+		self:_Tween(SearchStroke, {
+			Color = self.Accent,
+			Transparency = 0
+		}, 0.14)
+	end))
+
+	self:_Track(self.SearchBox.FocusLost:Connect(function()
+		self:_Tween(SearchStroke, {
+			Color = COLORS.Line,
+			Transparency = 0.25
+		}, 0.14)
+	end))
+
+	self:_Track(self.SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+		self:_ApplySearch()
+	end))
+
+	local Footer = Create("Frame", {
+		Name = "Profile",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 8, 1, -8),
+		Size = UDim2.new(1, -16, 0, 54),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		ZIndex = 5
+	}, Sidebar)
+
+	AddCorner(Footer, 10)
+	AddStroke(Footer, COLORS.Line, 0.35)
+
+	local Avatar = Create("ImageLabel", {
+		Name = "Avatar",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 8, 0.5, 0),
+		Size = UDim2.fromOffset(36, 36),
+		BackgroundColor3 = self.Accent,
+		BorderSizePixel = 0,
+		Image = "",
+		ImageTransparency = 1,
+		ScaleType = Enum.ScaleType.Crop,
+		ZIndex = 6
+	}, Footer)
+
+	AddCorner(Avatar, 18)
+
+	local AvatarInitial = Create("TextLabel", {
+		Name = "Fallback",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = string.upper(string.sub(LocalPlayer.Name, 1, 1)),
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		ZIndex = 7
+	}, Avatar)
+
+	local UsernameLabel = Create("TextLabel", {
+		Name = "Username",
+		Position = UDim2.fromOffset(52, 9),
+		Size = UDim2.new(1, -91, 0, 18),
+		BackgroundTransparency = 1,
+		Text = "@" .. LocalPlayer.Name,
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 6
+	}, Footer)
+
+	local UserIdLabel = Create("TextLabel", {
+		Name = "UserId",
+		Position = UDim2.fromOffset(52, 28),
+		Size = UDim2.new(1, -91, 0, 15),
+		BackgroundTransparency = 1,
+		Text = "ID " .. tostring(LocalPlayer.UserId),
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 6
+	}, Footer)
+
+	local EyeButton = Create("TextButton", {
+		Name = "ToggleProfileVisibility",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -6, 0.5, 0),
+		Size = UDim2.fromOffset(30, 30),
+		BackgroundColor3 = COLORS.Panel,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "◉",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 17,
+		ZIndex = 7
+	}, Footer)
+
+	AddCorner(EyeButton, 8)
+	self:_SetButtonHover(EyeButton, COLORS.Panel, COLORS.Hover)
+	self:_AttachTooltip(EyeButton, function()
+		return self.ProfileVisible
+			and "Hide profile information"
+			or "Show profile information"
+	end)
+
+	local AvatarLoaded = false
+
+	local function RenderProfile()
+		if self.ProfileVisible then
+			UsernameLabel.Text = "@" .. LocalPlayer.Name
+			UserIdLabel.Text = "ID " .. tostring(LocalPlayer.UserId)
+			Avatar.ImageTransparency = AvatarLoaded and 0 or 1
+			AvatarInitial.Text = string.upper(string.sub(LocalPlayer.Name, 1, 1))
+			AvatarInitial.Visible = not AvatarLoaded
+			EyeButton.Text = "◉"
+		else
+			UsernameLabel.Text = "••••••••"
+			UserIdLabel.Text = "ID hidden"
+			Avatar.ImageTransparency = 1
+			AvatarInitial.Text = "?"
+			AvatarInitial.Visible = true
+			EyeButton.Text = "⊘"
+		end
+	end
+
+	self:_Track(EyeButton.MouseButton1Click:Connect(function()
+		self.ProfileVisible = not self.ProfileVisible
+		RenderProfile()
+	end))
+
+	RenderProfile()
+
+	task.spawn(function()
+		local Success, Image = pcall(
+			Players.GetUserThumbnailAsync,
+			Players,
+			LocalPlayer.UserId,
+			Enum.ThumbnailType.HeadShot,
+			Enum.ThumbnailSize.Size100x100
+		)
+
+		if Success and Image and Avatar.Parent then
+			AvatarLoaded = true
+			Avatar.Image = Image
+			RenderProfile()
+		end
+	end)
+
+	local Content = Create("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(218, 0),
+		Size = UDim2.new(1, -218, 1, 0),
+		BackgroundColor3 = COLORS.Surface,
+		BorderSizePixel = 0,
+		ZIndex = 4
+	}, Body)
+
+	self.ContentTitle = Create("TextLabel", {
+		Name = "ContentTitle",
+		Position = UDim2.fromOffset(28, 25),
+		Size = UDim2.new(1, -56, 0, 30),
+		BackgroundTransparency = 1,
+		Text = "Welcome to Xen",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 22,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 5
+	}, Content)
+
+	self.ContentDescription = Create("TextLabel", {
+		Name = "ContentDescription",
+		Position = UDim2.fromOffset(28, 61),
+		Size = UDim2.new(1, -56, 0, 42),
+		BackgroundTransparency = 1,
+		Text = "Choose a script from the sidebar. Its page will open beside Xen.",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 13,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 5
+	}, Content)
+
+	self.EmptyCard = Create("Frame", {
+		Name = "EmptyCard",
+		Position = UDim2.fromOffset(28, 125),
+		Size = UDim2.new(1, -56, 0, 126),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		ZIndex = 5
+	}, Content)
+
+	AddCorner(self.EmptyCard, 13)
+	AddStroke(self.EmptyCard, COLORS.Line, 0.25)
+
+	self.ScriptCountLabel = Create("TextLabel", {
+		Position = UDim2.fromOffset(18, 14),
+		Size = UDim2.new(1, -36, 0, 28),
+		BackgroundTransparency = 1,
+		Text = "0 scripts registered",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 16,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 6
+	}, self.EmptyCard)
+
+	Create("TextLabel", {
+		Position = UDim2.fromOffset(18, 49),
+		Size = UDim2.new(1, -36, 0, 58),
+		BackgroundTransparency = 1,
+		Text = "Scripts load only when you press their Load button. Loaded controllers stay available until Xen is closed.",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 6
+	}, self.EmptyCard)
+
+	self.MinimizedLabel = Create("TextButton", {
+		Name = "Restore",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(150, 42),
+		BackgroundColor3 = COLORS.Shell,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "Open Xen",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+		Visible = false,
+		ZIndex = 50
+	}, self.Gui)
+
+	AddCorner(self.MinimizedLabel, 12)
+	AddStroke(self.MinimizedLabel)
+	self:_SetButtonHover(self.MinimizedLabel, COLORS.Shell, COLORS.Hover)
+	self:_AttachTooltip(self.MinimizedLabel, "Restore the Xen window")
+
+	self:_BuildPanel()
+
+	self:_Track(Close.MouseButton1Click:Connect(function()
+		self:Destroy()
+	end))
+
+	self:_Track(Minimize.MouseButton1Click:Connect(function()
+		self:SetMinimized(true)
+	end))
+
+	self:_Track(self.MinimizedLabel.MouseButton1Click:Connect(function()
+		self:SetMinimized(false)
+	end))
+
+	for _, Connection in ipairs(MakeDraggable(
+		TopBar,
+		self.Main,
+		function()
+			return not self.Minimized
+		end,
+		function(_, Delta)
+			if self.PanelOpen and self.Attached then
+				self.Panel.Position = OffsetPosition(self.PanelDragStart, Delta.X, Delta.Y)
+			end
+
+			self.ClosedPosition = OffsetPosition(self.ClosedDragStart, Delta.X, Delta.Y)
+		end
+	)) do
+		self:_Track(Connection)
+	end
+
+	self:_Track(TopBar.InputBegan:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			self.PanelDragStart = self.Panel.Position
+			self.ClosedDragStart = self.ClosedPosition
+		end
+	end))
+end
+
+function Window:_BuildPanel()
+	self.Panel = Create("Frame", {
+		Name = "ScriptPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 560, 0.5, 0),
+		Size = UDim2.fromOffset(PANEL_WIDTH, MAIN_HEIGHT),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		Visible = false,
+		ClipsDescendants = true,
+		ZIndex = 10
+	}, self.Gui)
+
+	AddCorner(self.Panel, self.Radius)
+	AddStroke(self.Panel)
+
+	self.PanelScale = Create("UIScale", {
+		Scale = 0.97
+	}, self.Panel)
+
+	self.PanelTop = Create("Frame", {
+		Name = "PanelTop",
+		Size = UDim2.new(1, 0, 0, 48),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		Active = true,
+		ZIndex = 11
+	}, self.Panel)
+
+	Create("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = COLORS.Line,
+		BorderSizePixel = 0,
+		ZIndex = 12
+	}, self.PanelTop)
+
+	self.PanelTitle = Create("TextLabel", {
+		Name = "PanelTitle",
+		Position = UDim2.fromOffset(15, 0),
+		Size = UDim2.new(1, -116, 1, 0),
+		BackgroundTransparency = 1,
+		Text = "Script",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 12
+	}, self.PanelTop)
+
+	self.PanelModeLabel = Create("TextLabel", {
+		Name = "Mode",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -76, 0.5, 0),
+		Size = UDim2.fromOffset(62, 20),
+		BackgroundTransparency = 1,
+		Text = "Attached",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 12
+	}, self.PanelTop)
+
+	self.SplitButton = self:_CreateIconButton(
+		self.PanelTop,
+		"▥",
+		UDim2.new(1, -70, 0, 9),
+		"Split panel"
+	)
+
+	self.PanelCloseButton = self:_CreateIconButton(
+		self.PanelTop,
+		"×",
+		UDim2.new(1, -36, 0, 9),
+		"Close panel"
+	)
+
+	self.PanelPages = Create("Frame", {
+		Name = "Pages",
+		Position = UDim2.fromOffset(0, 48),
+		Size = UDim2.new(1, 0, 1, -48),
+		BackgroundColor3 = COLORS.Panel,
+		BorderSizePixel = 0,
+		ZIndex = 11
+	}, self.Panel)
+
+	self:_Track(self.SplitButton.MouseButton1Click:Connect(function()
+		self:ToggleSplit()
+	end))
+
+	self:_Track(self.PanelCloseButton.MouseButton1Click:Connect(function()
+		self:ClosePanel()
+	end))
+
+	for _, Connection in ipairs(MakeDraggable(
+		self.PanelTop,
+		self.Panel,
+		function()
+			return self.PanelOpen and not self.Attached
+		end,
+		function()
+			-- Detached panels keep their own position.
+		end
+	)) do
+		self:_Track(Connection)
+	end
+end
+
+function Window:_AttachedMainPosition()
+	return OffsetPosition(
+		self.ClosedPosition,
+		-(PANEL_WIDTH + PANEL_GAP) / 2,
+		0
+	)
+end
+
+function Window:_AttachedPanelPosition(MainPosition)
+	return OffsetPosition(
+		MainPosition,
+		MAIN_WIDTH / 2 + PANEL_GAP + PANEL_WIDTH / 2,
+		0
+	)
+end
+
+function Window:_DetachedPanelPosition()
+	return OffsetPosition(
+		self.Main.Position,
+		MAIN_WIDTH / 2 + 26 + PANEL_WIDTH / 2,
+		10
+	)
+end
+
+function Window:OpenPanel(PageObject)
+	if self.Destroyed then
+		return
+	end
+
+	self.SelectedPage = PageObject
+	self.PanelTitle.Text = PageObject.Definition.Name
+
+	for _, RegisteredPage in ipairs(self.PageOrder) do
+		RegisteredPage.Frame.Visible = RegisteredPage == PageObject
+		RegisteredPage:_SetSelected(RegisteredPage == PageObject)
+	end
+
+	self.ContentTitle.Text = PageObject.Definition.Name
+	self.ContentDescription.Text = PageObject.Definition.Description
+		or ("Manage and load " .. PageObject.Definition.Name .. " from the attached panel.")
+
+	if not self.PanelOpen then
+		self.PanelOpen = true
+		self.ClosedPosition = self.Main.Position
+		self.Panel.Visible = true
+		self.PanelScale.Scale = 0.97
+
+		local MainTarget = self:_AttachedMainPosition()
+		local PanelTarget = self:_AttachedPanelPosition(MainTarget)
+
+		self.Panel.Position = OffsetPosition(PanelTarget, 42, 0)
+		self:_Tween(self.Main, { Position = MainTarget })
+		self:_Tween(self.Panel, { Position = PanelTarget })
+		self:_Tween(self.PanelScale, { Scale = 1 })
+	else
+		self.PanelScale.Scale = 0.985
+		self:_Tween(self.PanelScale, { Scale = 1 }, 0.18)
+	end
+end
+
+function Window:ClosePanel()
+	if not self.PanelOpen or self.Destroyed then
+		return
+	end
+
+	self.PanelOpen = false
+	self.SelectedPage = nil
+
+	local PanelTween = self:_Tween(self.Panel, {
+		Position = OffsetPosition(self.Panel.Position, 42, 0)
+	})
+
+	self:_Tween(self.PanelScale, { Scale = 0.97 })
+	self:_Tween(self.Main, { Position = self.ClosedPosition })
+
+	PanelTween.Completed:Once(function()
+		if not self.PanelOpen and self.Panel then
+			self.Panel.Visible = false
+		end
+	end)
+end
+
+function Window:ToggleSplit()
+	if not self.PanelOpen or self.Destroyed then
+		return
+	end
+
+	self.Attached = not self.Attached
+
+	if self.Attached then
+		self.PanelModeLabel.Text = "Attached"
+		self.SplitButton.Text = "▥"
+		self:_Tween(self.Panel, {
+			Position = self:_AttachedPanelPosition(self.Main.Position)
+		})
+	else
+		self.PanelModeLabel.Text = "Detached"
+		self.SplitButton.Text = "▣"
+		self:_Tween(self.Panel, {
+			Position = self:_DetachedPanelPosition()
+		})
+	end
+end
+
+function Window:SetMinimized(Minimized)
+	if self.Destroyed then
+		return
+	end
+
+	self.Minimized = Minimized == true
+	self.Main.Visible = not self.Minimized
+	self.Panel.Visible = self.PanelOpen and not self.Minimized
+	self.MinimizedLabel.Visible = self.Minimized
+end
+
+function Window:ToggleVisible()
+	self:SetMinimized(not self.Minimized)
+end
+
+function Window:_ApplySearch()
+	local Query = string.lower(self.SearchBox.Text)
+	Query = string.gsub(Query, "^%s*(.-)%s*$", "%1")
+
+	local Matches = 0
+
+	for _, PageObject in ipairs(self.PageOrder) do
+		local Definition = PageObject.Definition
+		local Searchable = string.lower(table.concat({
+			tostring(Definition.Name or ""),
+			tostring(Definition.Game or ""),
+			tostring(Definition.Id or ""),
+			tostring(Definition.Description or "")
+		}, " "))
+
+		local Visible = Query == ""
+			or string.find(Searchable, Query, 1, true) ~= nil
+
+		PageObject.Row.Visible = Visible
+
+		if Visible then
+			Matches += 1
+		end
+	end
+
+	self.NoSearchResults.Visible = Query ~= "" and Matches == 0
+end
+
+function Window:_UpdateCount()
+	local Count = #self.PageOrder
+	self.ScriptCountLabel.Text = tostring(Count)
+		.. (Count == 1 and " script registered" or " scripts registered")
+end
+
+function Window:RegisterScript(Definition)
+	assert(type(Definition) == "table", "Xen:RegisterScript expects a table.")
+	assert(type(Definition.Id) == "string" and Definition.Id ~= "", "Script Id is required.")
+	assert(type(Definition.Name) == "string" and Definition.Name ~= "", "Script Name is required.")
+	assert(
+		type(Definition.Url or Definition.URL) == "string"
+			or type(Definition.Loader) == "function",
+		"A script Url or Loader function is required."
+	)
+
+	if self.Pages[Definition.Id] then
+		error("Xen script Id is already registered: " .. Definition.Id)
+	end
+
+	Definition.Url = Definition.Url or Definition.URL
+
+	local PageObject = setmetatable({
+		Window = self,
+		Definition = Definition,
+		State = "Ready",
+		Controller = nil,
+		Connections = {},
+		Controls = {}
+	}, Page)
+
+	self.Pages[Definition.Id] = PageObject
+	self.PageOrder[#self.PageOrder + 1] = PageObject
+
+	PageObject:_Build()
+	self:_UpdateCount()
+	self:_ApplySearch()
+
+	if Definition.AutoSelect == true or #self.PageOrder == 1 then
+		PageObject:_SetSelected(false)
+	end
+
+	return PageObject
+end
+
+function Window:RegisterScripts(Definitions)
+	assert(type(Definitions) == "table", "Xen:RegisterScripts expects an array.")
+
+	local Registered = {}
+
+	for Index, Definition in ipairs(Definitions) do
+		Registered[Index] = self:RegisterScript(Definition)
+	end
+
+	return Registered
+end
+
+function Window:GetScript(Id)
+	return self.Pages[Id]
+end
+
+function Window:SelectScript(Id)
+	local PageObject = self.Pages[Id]
+
+	if PageObject then
+		self:OpenPanel(PageObject)
+	end
+
+	return PageObject
+end
+
+function Window:Destroy()
+	if self.Destroyed then
+		return
+	end
+
+	self.Destroyed = true
+
+	for _, PageObject in ipairs(self.PageOrder) do
+		PageObject:Unload()
+	end
+
+	for _, Connection in ipairs(self.Connections) do
+		SafeDisconnect(Connection)
+	end
+
+	table.clear(self.Connections)
+
+	if self.Gui then
+		self.Gui:Destroy()
+		self.Gui = nil
+	end
+end
+
+function Page:_Track(Connection)
+	self.Connections[#self.Connections + 1] = Connection
+	self.Window:_Track(Connection)
+	return Connection
+end
+
+function Page:_SetSelected(Selected)
+	self.Selected = Selected
+
+	if self.Row then
+		self.Row.BackgroundColor3 = Selected and COLORS.Raised or COLORS.Sidebar
+	end
+end
+
+function Page:_SetState(State, Message)
+	self.State = State
+	self.StateMessage = Message
+
+	local StateColor = COLORS.Muted
+
+	if State == "Loaded" then
+		StateColor = COLORS.Success
+	elseif State == "Loading" then
+		StateColor = COLORS.Warning
+	elseif State == "Failed" then
+		StateColor = COLORS.Danger
+	end
+
+	self.RowStatus.Text = State
+	self.RowStatus.TextColor3 = StateColor
+	self.StatusValue.Text = State
+	self.StatusValue.TextColor3 = StateColor
+
+	if State == "Loading" then
+		self.LoadButton.Text = "Loading…"
+		self.LoadButton.Active = false
+	elseif State == "Loaded" then
+		self.LoadButton.Text = "Loaded"
+		self.LoadButton.Active = false
+	elseif State == "Failed" then
+		self.LoadButton.Text = "Try again"
+		self.LoadButton.Active = true
+	else
+		self.LoadButton.Text = "Load script"
+		self.LoadButton.Active = true
+	end
+
+	if Message and Message ~= "" then
+		self.MessageLabel.Text = Message
+		self.MessageLabel.Visible = true
+	else
+		self.MessageLabel.Visible = false
+	end
+end
+
+function Page:_Build()
+	local Definition = self.Definition
+
+	self.Row = Create("TextButton", {
+		Name = Definition.Id,
+		Size = UDim2.new(1, 0, 0, 48),
+		BackgroundColor3 = COLORS.Sidebar,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "",
+		ZIndex = 6
+	}, self.Window.ScriptList)
+
+	AddCorner(self.Row, 9)
+	self.Window:_SetButtonHover(self.Row, COLORS.Sidebar, COLORS.Hover)
+	self.Window:_AttachTooltip(self.Row, "Open " .. Definition.Name)
+
+	local Initial = string.upper(string.sub(Definition.Name, 1, 1))
+
+	local InitialLabel = Create("TextLabel", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 8, 0.5, 0),
+		Size = UDim2.fromOffset(28, 28),
+		BackgroundColor3 = Color3.fromRGB(
+			math.floor(self.Window.Accent.R * 180),
+			math.floor(self.Window.Accent.G * 180),
+			math.floor(self.Window.Accent.B * 180)
+		),
+		BorderSizePixel = 0,
+		Text = Initial,
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		ZIndex = 7
+	}, self.Row)
+
+	AddCorner(InitialLabel, 8)
+
+	Create("TextLabel", {
+		Position = UDim2.fromOffset(45, 7),
+		Size = UDim2.new(1, -97, 0, 18),
+		BackgroundTransparency = 1,
+		Text = Definition.Name,
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 7
+	}, self.Row)
+
+	self.RowStatus = Create("TextLabel", {
+		Position = UDim2.fromOffset(45, 26),
+		Size = UDim2.new(1, -97, 0, 14),
+		BackgroundTransparency = 1,
+		Text = "Ready",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 7
+	}, self.Row)
+
+	Create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -10, 0.5, 0),
+		Size = UDim2.fromOffset(18, 24),
+		BackgroundTransparency = 1,
+		Text = "›",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 20,
+		ZIndex = 7
+	}, self.Row)
+
+	self.Frame = Create("ScrollingFrame", {
+		Name = Definition.Id .. "Page",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = COLORS.Line,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false,
+		ZIndex = 12
+	}, self.Window.PanelPages)
+
+	AddPadding(self.Frame, 16, 16, 16, 18)
+	Create("UIListLayout", {
+		Padding = UDim.new(0, 10),
+		SortOrder = Enum.SortOrder.LayoutOrder
+	}, self.Frame)
+
+	local Header = Create("Frame", {
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, 72),
+		BackgroundTransparency = 1,
+		LayoutOrder = 1,
+		ZIndex = 13
+	}, self.Frame)
+
+	Create("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 27),
+		BackgroundTransparency = 1,
+		Text = Definition.Name,
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 18,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 14
+	}, Header)
+
+	Create("TextLabel", {
+		Position = UDim2.fromOffset(0, 34),
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundTransparency = 1,
+		Text = Definition.Game or "Universal",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 14
+	}, Header)
+
+	local StatusCard = Create("Frame", {
+		Name = "StatusCard",
+		Size = UDim2.new(1, 0, 0, 76),
+		BackgroundColor3 = COLORS.Raised,
+		BorderSizePixel = 0,
+		LayoutOrder = 2,
+		ZIndex = 13
+	}, self.Frame)
+
+	AddCorner(StatusCard, 11)
+
+	Create("TextLabel", {
+		Position = UDim2.fromOffset(14, 11),
+		Size = UDim2.new(0.5, -14, 0, 18),
+		BackgroundTransparency = 1,
+		Text = "Status",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Gotham,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 14
+	}, StatusCard)
+
+	self.StatusValue = Create("TextLabel", {
+		Position = UDim2.fromOffset(14, 32),
+		Size = UDim2.new(1, -28, 0, 28),
+		BackgroundTransparency = 1,
+		Text = "Ready",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 15,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 14
+	}, StatusCard)
+
+	self.LoadButton = Create("TextButton", {
+		Name = "Load",
+		Size = UDim2.new(1, 0, 0, 42),
+		BackgroundColor3 = self.Window.Accent,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "Load script",
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+		LayoutOrder = 3,
+		ZIndex = 13
+	}, self.Frame)
+
+	AddCorner(self.LoadButton, 10)
+	self.Window:_AttachTooltip(self.LoadButton, function()
+		if self.State == "Failed" then
+			return "Try loading " .. Definition.Name .. " again"
+		elseif self.State == "Loaded" then
+			return Definition.Name .. " is already loaded"
+		elseif self.State == "Loading" then
+			return Definition.Name .. " is loading"
+		end
+
+		return "Load " .. Definition.Name
+	end)
+
+	self.MessageLabel = Create("TextLabel", {
+		Name = "Message",
+		Size = UDim2.new(1, 0, 0, 42),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.Code,
+		TextSize = 11,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Visible = false,
+		LayoutOrder = 4,
+		ZIndex = 13
+	}, self.Frame)
+
+	self.ControlsContainer = Create("Frame", {
+		Name = "Controls",
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		LayoutOrder = 5,
+		ZIndex = 13
+	}, self.Frame)
+
+	Create("UIListLayout", {
+		Padding = UDim.new(0, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder
+	}, self.ControlsContainer)
+
+	self:_Track(self.Row.MouseButton1Click:Connect(function()
+		self.Window:OpenPanel(self)
+	end))
+
+	self:_Track(self.LoadButton.MouseButton1Click:Connect(function()
+		self:Load()
+	end))
+end
+
+function Page:Load()
+	if self.State == "Loading" or self.State == "Loaded" then
+		return self.Controller
+	end
+
+	self:_SetState("Loading")
+
+	task.spawn(function()
+		local Success, Result = pcall(function()
+			if type(self.Definition.Loader) == "function" then
+				return self.Definition.Loader()
+			end
+
+			if type(loadstring) ~= "function" then
+				error("loadstring is not available in this environment.")
+			end
+
+			local Source = game:HttpGet(self.Definition.Url, true)
+			local Chunk, CompileError = loadstring(Source)
+
+			if not Chunk then
+				error(CompileError or "The downloaded script did not compile.")
+			end
+
+			return Chunk()
+		end)
+
+		if not Success then
+			self:_SetState("Failed", tostring(Result))
+			return
+		end
+
+		self.Controller = Result
+		self:_SetState("Loaded", "Loaded successfully.")
+
+		if type(self.Definition.OnLoaded) == "function" then
+			local Adapted, AdapterError = pcall(
+				self.Definition.OnLoaded,
+				self,
+				Result
+			)
+
+			if not Adapted then
+				self:_SetState("Failed", "Loaded, but its Xen adapter failed: " .. tostring(AdapterError))
+			end
+		end
+	end)
+
+	return nil
+end
+
+function Page:Unload()
+	for _, Connection in ipairs(self.Connections) do
+		SafeDisconnect(Connection)
+	end
+
+	if type(self.Controller) == "table"
+		and type(self.Controller.Destroy) == "function" then
+
+		pcall(function()
+			self.Controller:Destroy()
+		end)
+	end
+
+	self.Controller = nil
+end
+
+function Page:SetMessage(Message)
+	self.MessageLabel.Text = tostring(Message or "")
+	self.MessageLabel.Visible = self.MessageLabel.Text ~= ""
+end
+
+function Page:AddSection(Name)
+	local Label = Create("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 25),
+		BackgroundTransparency = 1,
+		Text = string.upper(tostring(Name)),
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 14
+	}, self.ControlsContainer)
+
+	self.Controls[#self.Controls + 1] = Label
+	return Label
+end
+
+function Page:AddLabel(Config)
+	if type(Config) ~= "table" then
+		Config = { Text = tostring(Config) }
+	end
+
+	local Label = Create("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 34),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = COLORS.Raised,
+		BorderSizePixel = 0,
+		Text = Config.Text or "",
+		TextColor3 = Config.Muted and COLORS.Muted or COLORS.Text,
+		Font = Config.Code and Enum.Font.Code or Enum.Font.Gotham,
+		TextSize = 12,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 14
+	}, self.ControlsContainer)
+
+	AddCorner(Label, 9)
+	AddPadding(Label, 12, 12, 10, 10)
+
+	local Control = {}
+
+	function Control:Set(Text)
+		Label.Text = tostring(Text)
+	end
+
+	self.Controls[#self.Controls + 1] = Control
+	return Control
+end
+
+function Page:AddButton(Config)
+	assert(type(Config) == "table", "Page:AddButton expects a table.")
+
+	local Button = Create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundColor3 = COLORS.Raised,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = Config.Name or "Button",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		ZIndex = 14
+	}, self.ControlsContainer)
+
+	AddCorner(Button, 9)
+	self.Window:_SetButtonHover(Button, COLORS.Raised, COLORS.Hover)
+	self.Window:_AttachTooltip(
+		Button,
+		Config.Tooltip or ("Run " .. (Config.Name or "this action"))
+	)
+
+	self:_Track(Button.MouseButton1Click:Connect(function()
+		if type(Config.Callback) == "function" then
+			local Success, Error = pcall(Config.Callback)
+
+			if not Success then
+				self:SetMessage(Error)
+			end
+		end
+	end))
+
+	local Control = {}
+
+	function Control:SetText(Text)
+		Button.Text = tostring(Text)
+	end
+
+	self.Controls[#self.Controls + 1] = Control
+	return Control
+end
+
+function Page:AddToggle(Config)
+	assert(type(Config) == "table", "Page:AddToggle expects a table.")
+
+	local Value = Config.Default == true
+
+	local Row = Create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 46),
+		BackgroundColor3 = COLORS.Raised,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "",
+		ZIndex = 14
+	}, self.ControlsContainer)
+
+	AddCorner(Row, 9)
+	self.Window:_SetButtonHover(Row, COLORS.Raised, COLORS.Hover)
+	self.Window:_AttachTooltip(Row, function()
+		return (Value and "Disable " or "Enable ") .. (Config.Name or "this option")
+	end)
+
+	Create("TextLabel", {
+		Position = UDim2.fromOffset(13, 0),
+		Size = UDim2.new(1, -68, 1, 0),
+		BackgroundTransparency = 1,
+		Text = Config.Name or "Toggle",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 15
+	}, Row)
+
+	local Track = Create("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -12, 0.5, 0),
+		Size = UDim2.fromOffset(38, 22),
+		BackgroundColor3 = Value and self.Window.Accent or COLORS.Line,
+		BorderSizePixel = 0,
+		ZIndex = 15
+	}, Row)
+
+	AddCorner(Track, 11)
+
+	local Knob = Create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = Value and UDim2.new(1, -11, 0.5, 0) or UDim2.new(0, 11, 0.5, 0),
+		Size = UDim2.fromOffset(16, 16),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+		ZIndex = 16
+	}, Track)
+
+	AddCorner(Knob, 8)
+
+	local Control = {}
+
+	local function Render(Animate)
+		local Properties = {
+			Position = Value and UDim2.new(1, -11, 0.5, 0) or UDim2.new(0, 11, 0.5, 0)
+		}
+
+		if Animate then
+			self.Window:_Tween(Knob, Properties, 0.16)
+			self.Window:_Tween(Track, {
+				BackgroundColor3 = Value and self.Window.Accent or COLORS.Line
+			}, 0.16)
+		else
+			Knob.Position = Properties.Position
+			Track.BackgroundColor3 = Value and self.Window.Accent or COLORS.Line
+		end
+	end
+
+	function Control:Set(NewValue, Silent)
+		NewValue = NewValue == true
+
+		if Value == NewValue then
+			return
+		end
+
+		Value = NewValue
+		Render(true)
+
+		if not Silent and type(Config.Callback) == "function" then
+			local Success, Error = pcall(Config.Callback, Value)
+
+			if not Success then
+				self.Page:SetMessage(Error)
+			end
+		end
+	end
+
+	function Control:Get()
+		return Value
+	end
+
+	Control.Page = self
+
+	self:_Track(Row.MouseButton1Click:Connect(function()
+		Control:Set(not Value)
+	end))
+
+	Render(false)
+	self.Controls[#self.Controls + 1] = Control
+	return Control
+end
+
+function Xen:CreateWindow(Config)
+	Config = Config or {}
+
+	local WindowObject = setmetatable({
+		Config = Config,
+		Title = Config.Title or "Xen",
+		GuiName = Config.GuiName or "XenUILibrary",
+		Accent = Config.Accent or Color3.fromRGB(139, 92, 246),
+		Radius = Config.Radius or 14,
+		MotionSeconds = Config.MotionSeconds or 0.32,
+		Pages = {},
+		PageOrder = {},
+		Connections = {},
+		PanelOpen = false,
+		Attached = true,
+		ProfileVisible = true,
+		Minimized = false,
+		Destroyed = false,
+		ClosedPosition = UDim2.fromScale(0.5, 0.5),
+		ClosedDragStart = UDim2.fromScale(0.5, 0.5),
+		PanelDragStart = UDim2.new(0.5, 560, 0.5, 0)
+	}, Window)
+
+	WindowObject:_Build()
+	return WindowObject
+end
+
+Xen.New = Xen.CreateWindow
+Xen.Version = "0.2.0"
+
+return Xen
