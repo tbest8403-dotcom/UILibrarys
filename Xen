@@ -182,18 +182,6 @@ local function MakeResizable(Frame, Config)
 			ZIndex = Config.ZIndex or 30
 		}, Frame)
 
-		Connections[#Connections + 1] = Handle.MouseEnter:Connect(function()
-			if Config.CanResize(Definition[2]) then
-				Handle.BackgroundTransparency = 0.72
-			end
-		end)
-
-		Connections[#Connections + 1] = Handle.MouseLeave:Connect(function()
-			if ActiveEdge ~= Definition[2] then
-				Handle.BackgroundTransparency = 1
-			end
-		end)
-
 		Connections[#Connections + 1] = Handle.InputBegan:Connect(function(Input)
 			if not Config.CanResize(Definition[2]) then
 				return
@@ -207,7 +195,6 @@ local function MakeResizable(Frame, Config)
 				DragStart = Input.Position
 				StartSize = Frame.AbsoluteSize
 				StartPosition = Frame.Position
-				Handle.BackgroundTransparency = 0.48
 			end
 		end)
 	end
@@ -265,12 +252,6 @@ local function MakeResizable(Frame, Config)
 		if Input == ActiveInput
 			or Input.UserInputType == Enum.UserInputType.MouseButton1
 			or Input.UserInputType == Enum.UserInputType.Touch then
-
-			for _, Child in ipairs(Frame:GetChildren()) do
-				if string.sub(Child.Name, 1, 6) == "Resize" then
-					Child.BackgroundTransparency = 1
-				end
-			end
 
 			ActiveEdge = nil
 			ActiveInput = nil
@@ -978,7 +959,7 @@ function Window:_Build()
 		Position = UDim2.fromOffset(42, 0),
 		Size = UDim2.new(1, -48, 1, 0),
 		BackgroundTransparency = 1,
-		Text = "XEN",
+		Text = "Xen",
 		TextColor3 = COLORS.Text,
 		Font = Enum.Font.GothamMedium,
 		TextSize = 12,
@@ -2091,6 +2072,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.3.0"
+Xen.Version = "0.3.2"
 
 return Xen
