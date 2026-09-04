@@ -164,6 +164,39 @@ local function ClearChildren(Container)
 	end
 end
 
+local function CreateXenMark(Parent, Position, ZIndex)
+	local Mark = Create("Frame", {
+		Name = "XenMark",
+		Position = Position,
+		Size = UDim2.fromOffset(24, 24),
+		BackgroundTransparency = 1,
+		ZIndex = ZIndex
+	}, Parent)
+
+	local Segments = {
+		{ UDim2.fromOffset(5, 2), -34 },
+		{ UDim2.fromOffset(5, 11), 34 },
+		{ UDim2.fromOffset(16, 2), 34 },
+		{ UDim2.fromOffset(16, 11), -34 }
+	}
+
+	for Index, Segment in ipairs(Segments) do
+		local Bar = Create("Frame", {
+			Name = "Segment" .. Index,
+			Position = Segment[1],
+			Size = UDim2.fromOffset(3, 12),
+			BackgroundColor3 = Index <= 2 and COLORS.Text or COLORS.Muted,
+			BorderSizePixel = 0,
+			Rotation = Segment[2],
+			ZIndex = ZIndex + 1
+		}, Mark)
+
+		AddCorner(Bar, 2)
+	end
+
+	return Mark
+end
+
 function Window:_Track(Connection)
 	self.Connections[#self.Connections + 1] = Connection
 	return Connection
@@ -354,20 +387,7 @@ function Window:_Build()
 
 	AddCorner(TopBar, self.Radius)
 
-	local Logo = Create("TextLabel", {
-		Name = "Logo",
-		Position = UDim2.fromOffset(14, 10),
-		Size = UDim2.fromOffset(28, 28),
-		BackgroundColor3 = self.Accent,
-		BorderSizePixel = 0,
-		Text = "X",
-		TextColor3 = Color3.new(1, 1, 1),
-		Font = Enum.Font.GothamBold,
-		TextSize = 14,
-		ZIndex = 6
-	}, TopBar)
-
-	AddCorner(Logo, 9)
+	CreateXenMark(TopBar, UDim2.fromOffset(15, 12), 6)
 
 	Create("TextLabel", {
 		Name = "Title",
@@ -450,22 +470,10 @@ function Window:_Build()
 	AddCorner(SearchFrame, 9)
 	local SearchStroke = AddStroke(SearchFrame, COLORS.Line, 0.25)
 
-	Create("TextLabel", {
-		Name = "SearchIcon",
-		Position = UDim2.fromOffset(10, 0),
-		Size = UDim2.fromOffset(18, 34),
-		BackgroundTransparency = 1,
-		Text = "⌕",
-		TextColor3 = COLORS.Muted,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 17,
-		ZIndex = 7
-	}, SearchFrame)
-
 	self.SearchBox = Create("TextBox", {
 		Name = "Input",
-		Position = UDim2.fromOffset(31, 0),
-		Size = UDim2.new(1, -39, 1, 0),
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(1, -24, 1, 0),
 		BackgroundTransparency = 1,
 		ClearTextOnFocus = false,
 		PlaceholderText = "Search scripts",
@@ -547,7 +555,7 @@ function Window:_Build()
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 8, 0.5, 0),
 		Size = UDim2.fromOffset(36, 36),
-		BackgroundColor3 = self.Accent,
+		BackgroundColor3 = Color3.fromRGB(55, 55, 52),
 		BorderSizePixel = 0,
 		Image = "",
 		ImageTransparency = 1,
@@ -738,26 +746,75 @@ function Window:_Build()
 		ZIndex = 6
 	}, self.EmptyCard)
 
-	self.MinimizedLabel = Create("TextButton", {
+	self.MinimizedLabel = Create("Frame", {
 		Name = "Restore",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(150, 42),
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 18),
+		Size = UDim2.fromOffset(172, 42),
 		BackgroundColor3 = COLORS.Shell,
 		BorderSizePixel = 0,
-		AutoButtonColor = false,
-		Text = "Open Xen",
-		TextColor3 = COLORS.Text,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 13,
 		Visible = false,
+		Active = true,
 		ZIndex = 50
 	}, self.Gui)
 
-	AddCorner(self.MinimizedLabel, 12)
-	AddStroke(self.MinimizedLabel)
-	self:_SetButtonHover(self.MinimizedLabel, COLORS.Shell, COLORS.Hover)
-	self:_AttachTooltip(self.MinimizedLabel, "Restore the Xen window")
+	AddCorner(self.MinimizedLabel, 13)
+	AddStroke(self.MinimizedLabel, COLORS.Line, 0.05)
+
+	local LauncherDragHandle = Create("TextButton", {
+		Name = "DragHandle",
+		Size = UDim2.new(1, -60, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "",
+		ZIndex = 51
+	}, self.MinimizedLabel)
+
+	CreateXenMark(LauncherDragHandle, UDim2.fromOffset(10, 9), 52)
+
+	Create("TextLabel", {
+		Name = "Name",
+		Position = UDim2.fromOffset(42, 0),
+		Size = UDim2.new(1, -48, 1, 0),
+		BackgroundTransparency = 1,
+		Text = "XEN",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 52
+	}, LauncherDragHandle)
+
+	Create("Frame", {
+		Name = "Divider",
+		Position = UDim2.new(1, -1, 0, 9),
+		Size = UDim2.fromOffset(1, 24),
+		BackgroundColor3 = COLORS.Line,
+		BorderSizePixel = 0,
+		ZIndex = 52
+	}, LauncherDragHandle)
+
+	local RestoreButton = Create("TextButton", {
+		Name = "Open",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.fromOffset(60, 42),
+		BackgroundColor3 = COLORS.Shell,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "OPEN",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 10,
+		ZIndex = 51
+	}, self.MinimizedLabel)
+
+	AddCorner(RestoreButton, 12)
+	self:_SetButtonHover(RestoreButton, COLORS.Shell, COLORS.Hover)
+	self:_AttachTooltip(LauncherDragHandle, "Drag the Xen launcher")
+	self:_AttachTooltip(RestoreButton, "Restore the Xen window")
 
 	self:_BuildPanel()
 
@@ -769,9 +826,22 @@ function Window:_Build()
 		self:SetMinimized(true)
 	end))
 
-	self:_Track(self.MinimizedLabel.MouseButton1Click:Connect(function()
+	self:_Track(RestoreButton.MouseButton1Click:Connect(function()
 		self:SetMinimized(false)
 	end))
+
+	for _, Connection in ipairs(MakeDraggable(
+		LauncherDragHandle,
+		self.MinimizedLabel,
+		function()
+			return self.Minimized
+		end,
+		function()
+			-- Draggable launcher keeps its last position.
+		end
+	)) do
+		self:_Track(Connection)
+	end
 
 	for _, Connection in ipairs(MakeDraggable(
 		TopBar,
@@ -1712,7 +1782,7 @@ function Xen:CreateWindow(Config)
 		Config = Config,
 		Title = Config.Title or "Xen",
 		GuiName = Config.GuiName or "XenUILibrary",
-		Accent = Config.Accent or Color3.fromRGB(139, 92, 246),
+		Accent = Config.Accent or Color3.fromRGB(104, 104, 99),
 		Radius = Config.Radius or 14,
 		MotionSeconds = Config.MotionSeconds or 0.32,
 		Pages = {},
@@ -1733,6 +1803,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.2.0"
+Xen.Version = "0.2.1"
 
 return Xen
