@@ -2112,6 +2112,198 @@ function Page:AddToggle(Config)
 	return Control
 end
 
+function Page:AddSlider(Config)
+	assert(type(Config) == "table", "Page:AddSlider expects a table.")
+
+	local PageObject = self
+	local Minimum = tonumber(Config.Min) or 0
+	local Maximum = tonumber(Config.Max) or 100
+	local Step = math.abs(tonumber(Config.Step) or 1)
+
+	if Maximum < Minimum then
+		Minimum, Maximum = Maximum, Minimum
+	end
+
+	if Step == 0 then
+		Step = 1
+	end
+
+	local function Snap(NewValue)
+		NewValue = math.clamp(tonumber(NewValue) or Minimum, Minimum, Maximum)
+		local Steps = math.floor(((NewValue - Minimum) / Step) + 0.5)
+		return math.clamp(Minimum + Steps * Step, Minimum, Maximum)
+	end
+
+	local Value = Snap(Config.Default == nil and Minimum or Config.Default)
+	local Dragging = false
+
+	local Row = Create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 64),
+		BackgroundColor3 = COLORS.Raised,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "",
+		ZIndex = 14
+	}, self.ControlsContainer)
+
+	AddCorner(Row, 9)
+	self.Window:_SetButtonHover(Row, COLORS.Raised, COLORS.Hover)
+	self.Window:_AttachTooltip(
+		Row,
+		Config.Tooltip or ("Adjust " .. (Config.Name or "this value"))
+	)
+
+	Create("TextLabel", {
+		Position = UDim2.fromOffset(13, 7),
+		Size = UDim2.new(1, -90, 0, 25),
+		BackgroundTransparency = 1,
+		Text = Config.Name or "Slider",
+		TextColor3 = COLORS.Text,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 15
+	}, Row)
+
+	local ValueLabel = Create("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -13, 0, 7),
+		Size = UDim2.fromOffset(72, 25),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = COLORS.Muted,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 15
+	}, Row)
+
+	local Track = Create("Frame", {
+		Position = UDim2.fromOffset(13, 43),
+		Size = UDim2.new(1, -26, 0, 5),
+		BackgroundColor3 = COLORS.Line,
+		BorderSizePixel = 0,
+		ZIndex = 15
+	}, Row)
+
+	AddCorner(Track, 3)
+
+	local Fill = Create("Frame", {
+		Size = UDim2.fromScale(0, 1),
+		BackgroundColor3 = self.Window.Accent,
+		BorderSizePixel = 0,
+		ZIndex = 16
+	}, Track)
+
+	AddCorner(Fill, 3)
+
+	local Knob = Create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(14, 14),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+		ZIndex = 17
+	}, Track)
+
+	AddCorner(Knob, 7)
+
+	local Control = {}
+
+	local function FormatValue()
+		if type(Config.Format) == "function" then
+			local Success, Result = pcall(Config.Format, Value)
+
+			if Success then
+				return tostring(Result)
+			end
+		end
+
+		return tostring(Value)
+	end
+
+	local function Render(Animate)
+		local Alpha = Maximum == Minimum and 0 or (Value - Minimum) / (Maximum - Minimum)
+		local FillSize = UDim2.fromScale(Alpha, 1)
+		local KnobPosition = UDim2.fromScale(Alpha, 0.5)
+
+		ValueLabel.Text = FormatValue()
+
+		if Animate then
+			self.Window:_Tween(Fill, { Size = FillSize }, 0.08)
+			self.Window:_Tween(Knob, { Position = KnobPosition }, 0.08)
+		else
+			Fill.Size = FillSize
+			Knob.Position = KnobPosition
+		end
+	end
+
+	function Control:Set(NewValue, Silent)
+		NewValue = Snap(NewValue)
+
+		if Value == NewValue then
+			return
+		end
+
+		Value = NewValue
+		Render(true)
+
+		if not Silent and type(Config.Callback) == "function" then
+			local Success, Error = pcall(Config.Callback, Value)
+
+			if not Success then
+				PageObject:SetMessage(Error)
+			end
+		end
+	end
+
+	function Control:Get()
+		return Value
+	end
+
+	local function SetFromScreenX(ScreenX)
+		local Width = Track.AbsoluteSize.X
+
+		if Width <= 0 then
+			return
+		end
+
+		local Alpha = math.clamp((ScreenX - Track.AbsolutePosition.X) / Width, 0, 1)
+		Control:Set(Minimum + (Maximum - Minimum) * Alpha)
+	end
+
+	self:_Track(Row.InputBegan:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			Dragging = true
+			SetFromScreenX(Input.Position.X)
+		end
+	end))
+
+	self:_Track(UserInputService.InputChanged:Connect(function(Input)
+		if Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement
+			or Input.UserInputType == Enum.UserInputType.Touch) then
+
+			SetFromScreenX(Input.Position.X)
+		end
+	end))
+
+	self:_Track(UserInputService.InputEnded:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			Dragging = false
+		end
+	end))
+
+	Control.Page = self
+	Render(false)
+	self.Controls[#self.Controls + 1] = Control
+	self.Window:_UpdateResponsiveLayout()
+	return Control
+end
+
 function Xen:CreateWindow(Config)
 	Config = Config or {}
 
@@ -2143,6 +2335,6 @@ function Xen:CreateWindow(Config)
 end
 
 Xen.New = Xen.CreateWindow
-Xen.Version = "0.3.8"
+Xen.Version = "0.3.9"
 
 return Xen
