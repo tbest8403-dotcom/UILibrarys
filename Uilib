@@ -1,0 +1,464 @@
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local Library = {Version = "1.0.0"}
+local shared = type(getgenv) == "function" and getgenv() or _G
+shared.ReusableUIWindows = shared.ReusableUIWindows or {}
+local windows = shared.ReusableUIWindows
+local defaults = {
+    Background = Color3.fromRGB(20, 24, 31),
+    Surface = Color3.fromRGB(33, 40, 51),
+    Border = Color3.fromRGB(61, 72, 89),
+    Text = Color3.fromRGB(238, 243, 250),
+    Muted = Color3.fromRGB(170, 184, 201),
+    Accent = Color3.fromRGB(78, 206, 157),
+}
+local function make(class, properties, parent)
+    local object = Instance.new(class)
+    for key, value in pairs(properties) do object[key] = value end
+    object.Parent = parent
+    return object
+end
+local function rounded(object, radius)
+    make("UICorner", {CornerRadius = UDim.new(0, radius or 6)}, object)
+end
+local function text(theme, parent, properties)
+    local props = {
+        BackgroundTransparency = 1, TextColor3 = theme.Text,
+        Font = Enum.Font.Gotham, TextSize = 13, BorderSizePixel = 0,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }
+    for key, value in pairs(properties) do props[key] = value end
+    return make("TextLabel", props, parent)
+end
+local function layout(parent, padding)
+    return make("UIListLayout", {Padding = UDim.new(0, padding or 7), SortOrder = Enum.SortOrder.LayoutOrder}, parent)
+end
+local function finite(value)
+    return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+local Window = {}
+Window.__index = Window
+local Container = {}
+Container.__index = Container
+local Control = {}
+Control.__index = Control
+function Window:_connect(signal, callback, owner)
+    local connection = signal:Connect(callback)
+    self._connections[connection] = true
+    if owner then owner._connections[connection] = true end
+    return connection
+end
+function Window:_callback(callback, ...)
+    if self._destroyed or type(callback) ~= "function" then return end
+    local ok, err = pcall(callback, ...)
+    if not ok then
+        self.LastError = tostring(err)
+        if type(self.OnError) == "function" then
+            pcall(self.OnError, self.LastError)
+        else
+            warn("ReusableUI: " .. self.LastError)
+        end
+    end
+end
+function Window:SetVisible(visible)
+    if not self._destroyed then self.Frame.Visible = visible == true end
+end
+function Window:SetTitle(title)
+    if not self._destroyed then self.Title.Text = tostring(title) end
+end
+function Window:SetToggleKey(key)
+    assert(typeof(key) == "EnumItem" and key.EnumType == Enum.KeyCode, "ToggleKey needs an Enum.KeyCode")
+    self.ToggleKey = key
+end
+function Window:SetMinimized(minimized)
+    if self._destroyed then return end
+    self.Minimized = minimized == true
+    self.Frame.Size = UDim2.fromOffset(self._width, self.Minimized and 42 or self._height)
+    self.TabBar.Visible = not self.Minimized
+    self.Content.Visible = not self.Minimized
+    self.MinimizeButton.Text = self.Minimized and "+" or "-"
+end
+function Window:Destroy()
+    if self._destroyed then return end
+    self._destroyed = true
+    self._slider = nil
+    for connection in pairs(self._connections) do connection:Disconnect() end
+    table.clear(self._connections)
+    if windows[self.Id] == self then windows[self.Id] = nil end
+    self.Gui:Destroy()
+    if type(self.OnDestroy) == "function" then
+        local ok, err = pcall(self.OnDestroy)
+        if not ok then warn("ReusableUI cleanup: " .. tostring(err)) end
+    end
+end
+function Control:Get()
+    return self.Value
+end
+function Control:Set(value, silent)
+    if self._destroyed or self.Window._destroyed then return self end
+    if self._normalize then value = self._normalize(value) end
+    if value == nil then return self end
+    local changed = value ~= self.Value
+    self.Value = value
+    if changed then
+        self:_render()
+        if not silent then self.Window:_callback(self.Callback, value) end
+    end
+    return self
+end
+function Control:SetText(value)
+    if not self._destroyed and not self.Window._destroyed then
+        self.Label.Text = tostring(value)
+    end
+    return self
+end
+function Control:Destroy()
+    if self._destroyed then return end
+    self._destroyed = true
+    if self.Window._slider and self.Window._slider.control == self then self.Window._slider = nil end
+    for connection in pairs(self._connections) do
+        connection:Disconnect()
+        self.Window._connections[connection] = nil
+    end
+    self.Frame:Destroy()
+end
+function Container:_row(options, height)
+    assert(not self.Window._destroyed, "Window is destroyed")
+    options = options or {}
+    self._order += 1
+    local row = make("Frame", {
+        Size = UDim2.new(1, 0, 0, height or 40), BackgroundColor3 = self.Window.Theme.Surface,
+        BorderSizePixel = 0, LayoutOrder = self._order,
+    }, self.Frame)
+    rounded(row)
+    local label = text(self.Window.Theme, row, {
+        Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -20, 0, 40),
+        Text = tostring(options.Name or options.Text or "Control"),
+    })
+    local control = setmetatable({Frame = row, Label = label, Window = self.Window,
+        Callback = options.Callback, _connections = {}, _destroyed = false}, Control)
+    return control
+end
+function Container:AddSection(name)
+    self._order += 1
+    local frame = make("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1, LayoutOrder = self._order}, self.Frame)
+    layout(frame)
+    text(self.Window.Theme, frame, {Size = UDim2.new(1, 0, 0, 25), Text = tostring(name),
+        Font = Enum.Font.GothamMedium, TextColor3 = self.Window.Theme.Accent, LayoutOrder = 0})
+    return setmetatable({Frame = frame, Window = self.Window, _order = 0}, Container)
+end
+function Container:AddToggle(options)
+    options = options or {}
+    local control = self:_row(options)
+    control.Label.Size = UDim2.new(1, -82, 0, 40)
+    local button = make("TextButton", {Size = UDim2.fromOffset(52, 24),
+        Position = UDim2.new(1, -62, 0, 8), BorderSizePixel = 0,
+        TextSize = 11, Font = Enum.Font.GothamMedium}, control.Frame)
+    rounded(button, 12)
+    control._normalize = function(value) return value == true end
+    function control:_render()
+        button.Text = self.Value and "ON" or "OFF"
+        button.BackgroundColor3 = self.Value and self.Window.Theme.Accent or self.Window.Theme.Border
+        button.TextColor3 = self.Value and self.Window.Theme.Background or self.Window.Theme.Text
+    end
+    self.Window:_connect(button.Activated, function() control:Set(not control.Value) end, control)
+    control:Set(options.Default == true, true)
+    if options.FireOnInit then self.Window:_callback(control.Callback, control.Value) end
+    return control
+end
+function Container:AddButton(options)
+    options = options or {}
+    local control = self:_row(options)
+    local button = make("TextButton", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        Text = "", BorderSizePixel = 0}, control.Frame)
+    control._render = function() end
+    function control:Press()
+        if not self._destroyed then self.Window:_callback(self.Callback) end
+    end
+    self.Window:_connect(button.Activated, function() control:Press() end, control)
+    return control
+end
+function Container:AddLabel(options)
+    if type(options) == "string" then options = {Text = options} end
+    options = options or {}
+    local control = self:_row(options, options.Height or 40)
+    control.Label.Size = UDim2.new(1, -20, 1, -12)
+    control.Label.Position = UDim2.fromOffset(10, 6)
+    control.Label.TextWrapped = true
+    control.Label.TextYAlignment = Enum.TextYAlignment.Top
+    control.Label.TextColor3 = self.Window.Theme.Muted
+    control._normalize = function(value) return tostring(value) end
+    function control:_render() self.Label.Text = self.Value end
+    control:Set(options.Text or options.Name or "", true)
+    return control
+end
+function Container:AddSlider(options)
+    options = options or {}
+    local minimum, maximum, step = options.Min or 0, options.Max or 100, options.Step or 1
+    assert(finite(minimum) and finite(maximum) and maximum > minimum, "Slider needs Max > Min")
+    assert(finite(step) and step > 0, "Slider needs a positive Step")
+    local control = self:_row(options, 64)
+    control.Label.Size = UDim2.new(1, -108, 0, 34)
+    local valueBox = make("TextBox", {Position = UDim2.new(1, -94, 0, 6),
+        Size = UDim2.fromOffset(84, 24), BackgroundColor3 = self.Window.Theme.Background,
+        BorderSizePixel = 0, TextColor3 = self.Window.Theme.Text, TextSize = 12,
+        Font = Enum.Font.Gotham, ClearTextOnFocus = false}, control.Frame)
+    rounded(valueBox, 4)
+    local track = make("TextButton", {Position = UDim2.fromOffset(12, 43),
+        Size = UDim2.new(1, -24, 0, 7), BackgroundColor3 = self.Window.Theme.Border,
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false}, control.Frame)
+    rounded(track, 4)
+    local fill = make("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = self.Window.Theme.Accent,
+        BorderSizePixel = 0}, track)
+    rounded(fill, 4)
+    local knob = make("Frame", {Size = UDim2.fromOffset(14, 14),
+        Position = UDim2.fromScale(0, 0.5), AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = self.Window.Theme.Accent, BorderSizePixel = 0}, track)
+    rounded(knob, 7)
+    control._normalize = function(value)
+        value = tonumber(value)
+        if not finite(value) then return nil end
+        local quantized = minimum + math.floor((value - minimum) / step + 0.5) * step
+        return tonumber(string.format("%.6f", math.clamp(quantized, minimum, maximum)))
+    end
+    function control:_render()
+        local alpha = (self.Value - minimum) / (maximum - minimum)
+        fill.Size = UDim2.fromScale(alpha, 1)
+        knob.Position = UDim2.fromScale(alpha, 0.5)
+        valueBox.Text = tostring(self.Value)
+    end
+    function control:_pointer(x)
+        local width = track.AbsoluteSize.X
+        if width > 0 then self:Set(minimum + math.clamp((x - track.AbsolutePosition.X) / width, 0, 1) * (maximum - minimum)) end
+    end
+    self.Window:_connect(track.InputBegan, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            self.Window._slider = {control = control, input = input}
+            control:_pointer(input.Position.X)
+        end
+    end, control)
+    self.Window:_connect(valueBox.FocusLost, function()
+        control:Set(valueBox.Text)
+        control:_render()
+    end, control)
+    control:Set(options.Default or minimum, true)
+    if control.Value == nil then control:Set(minimum, true) end
+    if options.FireOnInit then self.Window:_callback(control.Callback, control.Value) end
+    return control
+end
+function Container:AddDropdown(options)
+    options = options or {}
+    local control = self:_row(options)
+    control.Label.Size = UDim2.new(0.46, -10, 0, 40)
+    local button = make("TextButton", {Position = UDim2.new(0.46, 0, 0, 7),
+        Size = UDim2.new(0.54, -10, 0, 26), BackgroundColor3 = self.Window.Theme.Background,
+        TextColor3 = self.Window.Theme.Text, TextSize = 12, Font = Enum.Font.Gotham,
+        BorderSizePixel = 0, TextTruncate = Enum.TextTruncate.AtEnd}, control.Frame)
+    rounded(button, 4)
+    local menu = make("ScrollingFrame", {Position = UDim2.fromOffset(10, 42),
+        Size = UDim2.new(1, -20, 0, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.fromOffset(0, 0),
+        ScrollBarThickness = 3, ScrollBarImageColor3 = self.Window.Theme.Accent, Visible = false}, control.Frame)
+    layout(menu, 3)
+    control.Options = {}
+    control._optionConnections = {}
+    function control:_render() button.Text = self.Value or "Select" end
+    function control:_open(open)
+        menu.Visible = open and #self.Options > 0
+        local height = menu.Visible and math.min(#self.Options * 29, 145) or 0
+        menu.Size = UDim2.new(1, -20, 0, height)
+        self.Frame.Size = UDim2.new(1, 0, 0, menu.Visible and height + 50 or 40)
+    end
+    control._normalize = function(value)
+        value = tostring(value)
+        for _, option in ipairs(control.Options) do if option == value then return value end end
+    end
+    function control:SetOptions(values, silent)
+        if self._destroyed or self.Window._destroyed then return self end
+        for _, connection in ipairs(self._optionConnections) do
+            connection:Disconnect()
+            self._connections[connection] = nil
+            self.Window._connections[connection] = nil
+        end
+        table.clear(self._optionConnections)
+        for _, child in ipairs(menu:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+        table.clear(self.Options)
+        local seen = {}
+        for _, value in ipairs(values) do
+            value = tostring(value)
+            if not seen[value] then
+                seen[value] = true
+                self.Options[#self.Options + 1] = value
+                local choice = make("TextButton", {Size = UDim2.new(1, -4, 0, 26),
+                    BackgroundColor3 = self.Window.Theme.Background, BorderSizePixel = 0,
+                    TextColor3 = self.Window.Theme.Text, TextSize = 12, Font = Enum.Font.Gotham,
+                    Text = value, LayoutOrder = #self.Options}, menu)
+                rounded(choice, 4)
+                local connection = self.Window:_connect(choice.Activated, function()
+                    self:Set(value)
+                    self:_open(false)
+                end, self)
+                table.insert(self._optionConnections, connection)
+            end
+        end
+        if not seen[self.Value] then
+            if self.Options[1] then
+                self:Set(self.Options[1], silent)
+            else
+                self.Value = nil
+                self:_render()
+            end
+        end
+        self:_open(false)
+        return self
+    end
+    self.Window:_connect(button.Activated, function() control:_open(not menu.Visible) end, control)
+    control:SetOptions(options.Options or {}, true)
+    if options.Default ~= nil then control:Set(options.Default, true) end
+    if options.FireOnInit then self.Window:_callback(control.Callback, control.Value) end
+    return control
+end
+function Container:AddInput(options)
+    options = options or {}
+    local control = self:_row(options, 67)
+    control.Label.Size = UDim2.new(1, -20, 0, 28)
+    local input = make("TextBox", {Position = UDim2.fromOffset(10, 30),
+        Size = UDim2.new(1, -20, 0, 28), BackgroundColor3 = self.Window.Theme.Background,
+        BorderSizePixel = 0, TextColor3 = self.Window.Theme.Text, PlaceholderColor3 = self.Window.Theme.Muted,
+        PlaceholderText = options.Placeholder or "", ClearTextOnFocus = false,
+        TextSize = 12, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left}, control.Frame)
+    rounded(input, 4)
+    make("UIPadding", {PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, input)
+    control._normalize = function(value) return tostring(value) end
+    function control:_render() input.Text = self.Value end
+    self.Window:_connect(input.FocusLost, function() control:Set(input.Text) end, control)
+    control:Set(options.Default or "", true)
+    if options.FireOnInit then self.Window:_callback(control.Callback, control.Value) end
+    return control
+end
+function Window:AddTab(name)
+    assert(not self._destroyed, "Window is destroyed")
+    local page = make("ScrollingFrame", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        BorderSizePixel = 0, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.fromOffset(0, 0), ScrollBarThickness = 4,
+        ScrollBarImageColor3 = self.Theme.Accent, Visible = false}, self.Content)
+    make("UIPadding", {PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 8),
+        PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 8)}, page)
+    layout(page)
+    local button = make("TextButton", {Size = UDim2.fromOffset(100, 28),
+        BackgroundColor3 = self.Theme.Surface, BorderSizePixel = 0,
+        Text = tostring(name), TextColor3 = self.Theme.Muted, TextSize = 12,
+        Font = Enum.Font.GothamMedium, LayoutOrder = #self.Tabs + 1}, self.TabBar)
+    rounded(button, 5)
+    local tab = setmetatable({Frame = page, Window = self, Button = button, _order = 0}, Container)
+    function tab:Select()
+        if self.Window._destroyed then return end
+        for _, other in ipairs(self.Window.Tabs) do
+            other.Frame.Visible = other == self
+            other.Button.TextColor3 = other == self and self.Window.Theme.Accent or self.Window.Theme.Muted
+        end
+        self.Window.SelectedTab = self
+    end
+    table.insert(self.Tabs, tab)
+    self:_connect(button.Activated, function() tab:Select() end)
+    if #self.Tabs == 1 then tab:Select() end
+    return tab
+end
+function Library:CreateWindow(options)
+    options = options or {}
+    local id = tostring(options.Id or options.Title or "ReusableUI")
+    if windows[id] then windows[id]:Destroy() end
+    local theme = {}
+    for key, value in pairs(defaults) do theme[key] = value end
+    for key, value in pairs(options.Theme or {}) do theme[key] = value end
+    local localPlayer = Players.LocalPlayer
+    assert(localPlayer, "ReusableUI needs a local player")
+    local gui = make("ScreenGui", {Name = id, ResetOnSpawn = false, IgnoreGuiInset = true,
+        DisplayOrder = options.DisplayOrder or 1000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling},
+        options.Parent or localPlayer:WaitForChild("PlayerGui"))
+    local window = setmetatable({Id = id, Gui = gui, Theme = theme, Tabs = {}, _connections = {},
+        OnDestroy = options.OnDestroy, OnError = options.OnError, ToggleKey = options.ToggleKey or Enum.KeyCode.RightShift,
+        _width = options.Width or 380, _height = options.Height or 500, Minimized = false}, Window)
+    window.Frame = make("Frame", {Size = UDim2.fromOffset(window._width, window._height),
+        Position = options.Position or UDim2.fromOffset(32, 80), BackgroundColor3 = theme.Background,
+        BorderSizePixel = 0, ZIndex = 20}, gui)
+    rounded(window.Frame, 9)
+    make("UIStroke", {Color = theme.Border, Thickness = 1}, window.Frame)
+    local header = make("TextButton", {Size = UDim2.new(1, -78, 0, 42), BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false}, window.Frame)
+    window.Title = text(theme, header, {Position = UDim2.fromOffset(13, 0),
+        Size = UDim2.new(1, -13, 1, 0), Text = options.Title or "Reusable UI", Font = Enum.Font.GothamMedium,
+        TextSize = 15, TextTruncate = Enum.TextTruncate.AtEnd})
+    window.MinimizeButton = make("TextButton", {Position = UDim2.new(1, -72, 0, 7),
+        Size = UDim2.fromOffset(28, 28), BackgroundTransparency = 1, Text = "-",
+        TextColor3 = theme.Muted, TextSize = 21}, window.Frame)
+    local close = make("TextButton", {Position = UDim2.new(1, -38, 0, 7), Size = UDim2.fromOffset(28, 28),
+        BackgroundTransparency = 1, Text = "X", TextColor3 = theme.Text, TextSize = 22}, window.Frame)
+    window.TabBar = make("ScrollingFrame", {Position = UDim2.fromOffset(12, 45),
+        Size = UDim2.new(1, -24, 0, 33), BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 2, AutomaticCanvasSize = Enum.AutomaticSize.X,
+        CanvasSize = UDim2.fromOffset(0, 0), ScrollingDirection = Enum.ScrollingDirection.X}, window.Frame)
+    make("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder}, window.TabBar)
+    window.Content = make("Frame", {Position = UDim2.fromOffset(12, 84), Size = UDim2.new(1, -24, 1, -96),
+        BackgroundTransparency = 1}, window.Frame)
+    local function fit()
+        local camera = Workspace.CurrentCamera
+        if not camera then return end
+        local size = camera.ViewportSize
+        window._width = math.min(options.Width or 380, math.max(180, size.X - 24))
+        window._height = math.min(options.Height or 500, math.max(150, size.Y - 24))
+        window:SetMinimized(window.Minimized)
+        local position = window.Frame.Position
+        local x = position.X.Scale * size.X + position.X.Offset
+        local y = position.Y.Scale * size.Y + position.Y.Offset
+        window.Frame.Position = UDim2.fromOffset(math.clamp(x, 0, math.max(0, size.X - window._width)),
+            math.clamp(y, 0, math.max(0, size.Y - (window.Minimized and 42 or window._height))))
+    end
+    window:_connect(header.InputBegan, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            window._drag = {input = input, origin = input.Position, position = window.Frame.AbsolutePosition}
+        end
+    end)
+    window:_connect(UIS.InputChanged, function(input)
+        local drag = window._drag
+        if drag and (input == drag.input or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local delta = input.Position - drag.origin
+            local camera = Workspace.CurrentCamera
+            local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+            local x = math.clamp(drag.position.X + delta.X, 0, math.max(0, viewport.X - window._width))
+            local y = math.clamp(drag.position.Y + delta.Y, 0, math.max(0, viewport.Y - 42))
+            window.Frame.Position = UDim2.fromOffset(x, y)
+        end
+        local slider = window._slider
+        if slider and (input == slider.input or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            slider.control:_pointer(input.Position.X)
+        end
+    end)
+    window:_connect(UIS.InputEnded, function(input)
+        if window._drag and window._drag.input == input then window._drag = nil end
+        if window._slider and window._slider.input == input then window._slider = nil end
+    end)
+    window:_connect(UIS.InputBegan, function(input, processed)
+        if not processed and not UIS:GetFocusedTextBox() and input.KeyCode == window.ToggleKey then
+            window:SetVisible(not window.Frame.Visible)
+        end
+    end)
+    window:_connect(close.Activated, function() window:Destroy() end)
+    window:_connect(window.MinimizeButton.Activated, function() window:SetMinimized(not window.Minimized) end)
+    local viewportConnection
+    local function bindCamera()
+        if viewportConnection then viewportConnection:Disconnect(); window._connections[viewportConnection] = nil end
+        local camera = Workspace.CurrentCamera
+        if camera then viewportConnection = window:_connect(camera:GetPropertyChangedSignal("ViewportSize"), fit) end
+        fit()
+    end
+    window:_connect(Workspace:GetPropertyChangedSignal("CurrentCamera"), bindCamera)
+    window:_connect(gui.Destroying, function() window:Destroy() end)
+    windows[id] = window
+    bindCamera()
+    return window
+end
+return Library
