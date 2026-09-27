@@ -1,7 +1,7 @@
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-local Library = {Version = "1.0.0"}
+local Library = {Version = "1.0.1"}
 local shared = type(getgenv) == "function" and getgenv() or _G
 shared.ReusableUIWindows = shared.ReusableUIWindows or {}
 local windows = shared.ReusableUIWindows
@@ -62,7 +62,10 @@ function Window:_callback(callback, ...)
     end
 end
 function Window:SetVisible(visible)
-    if not self._destroyed then self.Frame.Visible = visible == true end
+    if not self._destroyed then
+        self.Frame.Visible = visible == true
+        if not self.Frame.Visible then self._drag = nil; self._slider = nil end
+    end
 end
 function Window:SetTitle(title)
     if not self._destroyed then self.Title.Text = tostring(title) end
@@ -82,6 +85,7 @@ end
 function Window:Destroy()
     if self._destroyed then return end
     self._destroyed = true
+    self._drag = nil
     self._slider = nil
     for connection in pairs(self._connections) do connection:Disconnect() end
     table.clear(self._connections)
@@ -417,21 +421,34 @@ function Library:CreateWindow(options)
         window.Frame.Position = UDim2.fromOffset(math.clamp(x, 0, math.max(0, size.X - window._width)),
             math.clamp(y, 0, math.max(0, size.Y - (window.Minimized and 42 or window._height))))
     end
-    window:_connect(header.InputBegan, function(input)
+    window._beginDrag = function(input)
+        if window._drag then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            window._drag = {input = input, origin = input.Position, position = window.Frame.AbsolutePosition}
+            local mouse = input.UserInputType == Enum.UserInputType.MouseButton1
+            local pointer = mouse and UIS:GetMouseLocation() or Vector2.new(input.Position.X, input.Position.Y)
+            window._drag = {input = input, mouse = mouse, origin = pointer, position = window.Frame.Position}
         end
-    end)
-    window:_connect(UIS.InputChanged, function(input)
+    end
+    window._updateDrag = function(input)
         local drag = window._drag
-        if drag and (input == drag.input or input.UserInputType == Enum.UserInputType.MouseMovement) then
-            local delta = input.Position - drag.origin
+        if drag and ((drag.mouse and input.UserInputType == Enum.UserInputType.MouseMovement)
+            or (not drag.mouse and input == drag.input)) then
+            local pointer = drag.mouse and UIS:GetMouseLocation() or Vector2.new(input.Position.X, input.Position.Y)
+            local delta = pointer - drag.origin
+            if delta.Magnitude == 0 then return end
             local camera = Workspace.CurrentCamera
             local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-            local x = math.clamp(drag.position.X + delta.X, 0, math.max(0, viewport.X - window._width))
-            local y = math.clamp(drag.position.Y + delta.Y, 0, math.max(0, viewport.Y - 42))
-            window.Frame.Position = UDim2.fromOffset(x, y)
+            local startX = drag.position.X.Scale * viewport.X + drag.position.X.Offset
+            local startY = drag.position.Y.Scale * viewport.Y + drag.position.Y.Offset
+            local x = math.clamp(startX + delta.X, 0, math.max(0, viewport.X - window._width))
+            local y = math.clamp(startY + delta.Y, 0, math.max(0, viewport.Y - 42))
+            window.Frame.Position = UDim2.new(drag.position.X.Scale, drag.position.X.Offset + x - startX,
+                drag.position.Y.Scale, drag.position.Y.Offset + y - startY)
         end
+    end
+    window:_connect(header.InputBegan, window._beginDrag)
+    window:_connect(UIS.InputChanged, function(input)
+        window._updateDrag(input)
         local slider = window._slider
         if slider and (input == slider.input or input.UserInputType == Enum.UserInputType.MouseMovement) then
             slider.control:_pointer(input.Position.X)
@@ -441,6 +458,7 @@ function Library:CreateWindow(options)
         if window._drag and window._drag.input == input then window._drag = nil end
         if window._slider and window._slider.input == input then window._slider = nil end
     end)
+    window:_connect(UIS.WindowFocusReleased, function() window._drag = nil; window._slider = nil end)
     window:_connect(UIS.InputBegan, function(input, processed)
         if not processed and not UIS:GetFocusedTextBox() and input.KeyCode == window.ToggleKey then
             window:SetVisible(not window.Frame.Visible)
