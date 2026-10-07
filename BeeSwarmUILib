@@ -1,0 +1,1325 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
+
+local Library = { Version = "1.0.0" }
+local Window = {}
+Window.__index = Window
+local Tab = {}
+Tab.__index = Tab
+local Element = {}
+Element.__index = Element
+
+local defaultTheme = {
+	Background = Color3.fromRGB(24, 21, 17),
+	Sidebar = Color3.fromRGB(30, 26, 20),
+	Surface = Color3.fromRGB(39, 33, 25),
+	SurfaceHover = Color3.fromRGB(49, 41, 29),
+	Input = Color3.fromRGB(28, 24, 19),
+	Accent = Color3.fromRGB(255, 195, 66),
+	AccentDark = Color3.fromRGB(157, 108, 28),
+	Text = Color3.fromRGB(255, 243, 213),
+	Muted = Color3.fromRGB(167, 151, 122),
+	Border = Color3.fromRGB(68, 55, 35),
+	Success = Color3.fromRGB(145, 206, 125),
+	Warning = Color3.fromRGB(255, 195, 66),
+	Error = Color3.fromRGB(242, 123, 112),
+}
+
+local function make(class, props, parent)
+	local object = Instance.new(class)
+	for key, value in pairs(props or {}) do
+		object[key] = value
+	end
+	object.Parent = parent
+	return object
+end
+
+local function round(object, radius)
+	return make("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, object)
+end
+
+local function pad(object, x, y)
+	make("UIPadding", {
+		PaddingLeft = UDim.new(0, x), PaddingRight = UDim.new(0, x),
+		PaddingTop = UDim.new(0, y or x), PaddingBottom = UDim.new(0, y or x),
+	}, object)
+end
+
+local function list(object, spacing, horizontal)
+	return make("UIListLayout", {
+		Padding = UDim.new(0, spacing or 8), SortOrder = Enum.SortOrder.LayoutOrder,
+		FillDirection = horizontal and Enum.FillDirection.Horizontal or Enum.FillDirection.Vertical,
+	}, object)
+end
+
+local function disconnect(owner)
+	for _, connection in ipairs(owner._connections or {}) do
+		connection:Disconnect()
+	end
+	table.clear(owner._connections or {})
+end
+
+local function connect(owner, signal, callback)
+	local connection = signal:Connect(callback)
+	table.insert(owner._connections, connection)
+	return connection
+end
+
+local function callback(owner, fn, ...)
+	if type(fn) ~= "function" or owner._destroyed then return end
+	local ok, message = pcall(fn, ...)
+	if not ok then warn("[BeeUI] Callback: " .. tostring(message)) end
+end
+
+local function pointer(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		return Vector2.new(input.Position.X, input.Position.Y)
+	end
+	return UserInputService:GetMouseLocation()
+end
+
+local function pressing(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local function bindDrag(owner, handle, onStart, onMove, onEnd)
+	local active
+	local scrolling
+	local function finish()
+		if not active then return end
+		active = nil
+		if owner._window._drag and owner._window._drag.Owner == owner then owner._window._drag = nil end
+		if owner._tab and not owner._tab._destroyed then owner._tab.Page.ScrollingEnabled = scrolling end
+		if onEnd then onEnd() end
+	end
+	connect(owner, handle.InputBegan, function(input)
+		if not pressing(input) or owner._destroyed or owner.Disabled then return end
+		if owner._window._drag or owner._window._capture then return end
+		active = input
+		owner._window._drag = { Owner = owner, Finish = finish }
+		if owner._tab then scrolling = owner._tab.Page.ScrollingEnabled; owner._tab.Page.ScrollingEnabled = false end
+		if onStart then onStart(pointer(input)) end
+		onMove(pointer(input))
+	end)
+	connect(owner, UserInputService.InputChanged, function(input)
+		if active and (input == active or (active.UserInputType ~= Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.MouseMovement)) then
+			if owner.Disabled then finish() return end
+			onMove(pointer(input))
+		end
+	end)
+	connect(owner, UserInputService.InputEnded, function(input)
+		if active and (input == active or (active.UserInputType ~= Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.MouseButton1)) then
+			finish()
+		end
+	end)
+	return finish
+end
+
+function Window:_tween(object, props, duration)
+	if self._destroyed or not object.Parent then return end
+	local previous = self._tweens[object]
+	if previous then previous:Cancel() end
+	if self.ReducedMotion then
+		for key, value in pairs(props) do object[key] = value end
+		return
+	end
+	local tween = TweenService:Create(object, TweenInfo.new(duration or 0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props)
+	self._tweens[object] = tween
+	tween.Completed:Once(function()
+		if self._tweens[object] == tween then self._tweens[object] = nil end
+		tween:Destroy()
+	end)
+	tween:Play()
+	return tween
+end
+
+function Window:_paint(object, property, key)
+	local bindings = self._themeBindings[object]
+	if not bindings then bindings = {}; self._themeBindings[object] = bindings end
+	bindings[property] = key
+	object[property] = type(key) == "function" and key(self.Theme) or self.Theme[key]
+end
+
+function Window:_stroke(object, color)
+	local stroke = make("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, object)
+	self:_paint(stroke, "Color", color or "Border")
+	return stroke
+end
+
+function Window:_text(parent, text, size, props)
+	local settings = {
+		BackgroundTransparency = 1, BorderSizePixel = 0, Text = tostring(text or ""),
+		Font = Enum.Font.Gotham, TextSize = size or 13, TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, 20),
+	}
+	for key, value in pairs(props or {}) do settings[key] = value end
+	local label = make("TextLabel", settings, parent)
+	self:_paint(label, "TextColor3", "Text")
+	return label
+end
+
+function Window:_button(parent, text, props, owner)
+	local settings = { Text = text or "", Font = Enum.Font.GothamMedium, TextSize = 13,
+		AutoButtonColor = false, BorderSizePixel = 0, Size = UDim2.fromOffset(32, 32) }
+	for key, value in pairs(props or {}) do settings[key] = value end
+	local button = make("TextButton", settings, parent)
+	round(button, 8)
+	self:_paint(button, "BackgroundColor3", "Surface")
+	self:_paint(button, "TextColor3", "Text")
+	connect(owner or self, button.MouseEnter, function()
+		self:_tween(button, { BackgroundColor3 = self.Theme.SurfaceHover })
+	end)
+	connect(owner or self, button.MouseLeave, function()
+		self:_tween(button, { BackgroundColor3 = self.Theme.Surface })
+	end)
+	return button
+end
+
+function Window:_bee(parent, position, size)
+	local bee = make("Frame", { Name = "Bee", BackgroundTransparency = 1, Size = UDim2.fromOffset(size, size), Position = position }, parent)
+	local function part(name, x, y, width, height, color, angle, z)
+		local frame = make("Frame", { Name = name, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(width, height), Rotation = angle or 0, ZIndex = z or 2 }, bee)
+		round(frame, 100)
+		if typeof(color) == "Color3" then frame.BackgroundColor3 = color else self:_paint(frame, "BackgroundColor3", color) end
+		return frame
+	end
+	local left = part("LeftWing", 0.4, 0.26, 0.31, 0.39, Color3.fromRGB(238, 239, 209), -28, 1)
+	local right = part("RightWing", 0.62, 0.25, 0.3, 0.38, Color3.fromRGB(255, 247, 219), 27, 1)
+	part("Stinger", 0.17, 0.58, 0.18, 0.12, "Background", 0, 1)
+	local body = part("Body", 0.49, 0.54, 0.72, 0.47, "Accent", -9, 2)
+	body.ClipsDescendants = true
+	for index = 1, 2 do
+		local height = index == 1 and 0.82 or 0.96
+		local stripe = make("Frame", { BorderSizePixel = 0, BackgroundColor3 = Color3.fromRGB(46, 34, 20),
+			Position = UDim2.fromScale(0.19 + (index - 1) * 0.25, (1 - height) / 2), Size = UDim2.fromScale(0.13, height), ZIndex = 3 }, body)
+		round(stripe, 100)
+	end
+	part("Eye", 0.72, 0.49, 0.065, 0.075, Color3.fromRGB(46, 34, 20), 0, 4)
+	part("EyeLight", 0.732, 0.477, 0.021, 0.025, Color3.new(1, 1, 1), 0, 5)
+	part("Cheek", 0.75, 0.6, 0.1, 0.06, Color3.fromRGB(244, 144, 78), -9, 4)
+	table.insert(self._bees, { Root = bee, Left = left, Right = right, Phase = #self._bees * 1.8 })
+	return bee
+end
+
+function Window:_finishDrag()
+	local drag = self._drag
+	self._drag = nil
+	if drag then drag.Finish() end
+end
+
+function Window:_releaseKeys()
+	for _, element in ipairs(table.clone(self._keybinds)) do
+		if element._held then
+			element._held = false
+			callback(element, element.Callback, false, element.Value)
+		end
+	end
+end
+
+function Window:_cancelCapture()
+	if self._capture then
+		local element = self._capture
+		self._capture = nil
+		element._render()
+	end
+end
+
+local function normalizeKey(value)
+	if value == nil or value == "None" then return nil end
+	if typeof(value) == "EnumItem" then
+		if value.EnumType == Enum.KeyCode and value ~= Enum.KeyCode.Unknown then return value end
+		if value == Enum.UserInputType.MouseButton1 or value == Enum.UserInputType.MouseButton2 or value == Enum.UserInputType.MouseButton3 then return value end
+	elseif type(value) == "string" then
+		local name = value:match("([^%.]+)$")
+		local ok, item = pcall(function() return Enum.KeyCode[name] end)
+		if ok and item ~= Enum.KeyCode.Unknown then return item end
+		ok, item = pcall(function() return Enum.UserInputType[name] end)
+		if ok and (item == Enum.UserInputType.MouseButton1 or item == Enum.UserInputType.MouseButton2 or item == Enum.UserInputType.MouseButton3) then return item end
+	end
+	error("Expected a KeyCode, mouse button, key name, or 'None'", 3)
+end
+
+local function inputKey(input)
+	if input.UserInputType == Enum.UserInputType.Keyboard then return input.KeyCode end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.MouseButton3 then return input.UserInputType end
+	return nil
+end
+
+function Library:CreateWindow(options)
+	options = options or {}
+	local player = Players.LocalPlayer
+	assert(player, "BeeUI must run on a Roblox client")
+	local self = setmetatable({
+		Theme = table.clone(defaultTheme), Tabs = {}, Flags = {}, Elements = {},
+		_connections = {}, _bees = {}, _keybinds = {}, _notifications = {}, _tasks = {},
+		_themeBindings = setmetatable({}, { __mode = "k" }), _tweens = setmetatable({}, { __mode = "k" }),
+		_visible = true, _destroyed = false, _userScale = options.Scale or 1,
+		ReducedMotion = options.ReducedMotion == true, ToggleKey = normalizeKey(options.ToggleKey or Enum.KeyCode.RightShift),
+	}, Window)
+	self._window = self
+	self:SetTheme(options.Theme or {})
+	assert(type(self._userScale) == "number" and self._userScale > 0, "Scale must be positive")
+	local parent = options.Parent
+	if not parent and type(gethui) == "function" then
+		local ok, result = pcall(gethui)
+		if ok and typeof(result) == "Instance" then parent = result end
+	end
+	parent = parent or player:WaitForChild("PlayerGui")
+	local id = "BeeUI_" .. tostring(options.Id or "Default")
+	local previous = parent:FindFirstChild(id)
+	if previous then
+		local cleanup = previous:FindFirstChild("Cleanup")
+		if cleanup and cleanup:IsA("BindableFunction") then pcall(function() cleanup:Invoke() end) end
+		if previous.Parent then previous:Destroy() end
+	end
+	local gui = make("ScreenGui", {
+		Name = id, ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = options.DisplayOrder or 80,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, ScreenInsets = Enum.ScreenInsets.None,
+	}, parent)
+	self.Gui = gui
+	local cleanup = make("BindableFunction", { Name = "Cleanup" }, gui)
+	cleanup.OnInvoke = function() self:Destroy() end
+	connect(self, gui.Destroying, function() self:Destroy(true) end)
+	self._width = math.max(620, options.Width or 780)
+	self._height = math.max(420, options.Height or 550)
+	local root = make("Frame", { Name = "Window", BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(self._width, self._height), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) }, gui)
+	self.Root = root
+	self._scale = make("UIScale", { Scale = 1 }, root)
+	local shadow = make("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.5,
+		Position = UDim2.fromOffset(-7, 8), Size = UDim2.new(1, 14, 1, 6), BorderSizePixel = 0, ZIndex = 0 }, root)
+	round(shadow, 21)
+	self._shadow = shadow
+	local panel = make("CanvasGroup", { Name = "Panel", Size = UDim2.fromScale(1, 1), BorderSizePixel = 0, GroupTransparency = 0 }, root)
+	self._panel = panel
+	round(panel, 15)
+	self:_paint(panel, "BackgroundColor3", "Background")
+	self:_stroke(panel)
+	local header = make("Frame", { Name = "Topbar", Size = UDim2.new(1, 0, 0, 76), BorderSizePixel = 0 }, panel)
+	self:_paint(header, "BackgroundColor3", "Sidebar")
+	local dragHandle = make("TextButton", { Name = "DragHandle", BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+		Size = UDim2.new(1, -98, 1, 0) }, header)
+	self:_bee(dragHandle, UDim2.fromOffset(15, 7), 64)
+	self._title = self:_text(dragHandle, options.Title or "Bee UI", 22, { Font = Enum.Font.GothamBold,
+		Position = UDim2.fromOffset(87, 17), Size = UDim2.new(1, -110, 0, 27) })
+	self._subtitle = self:_text(dragHandle, options.Subtitle or "A little honey. A lot of possibility.", 11, {
+		Position = UDim2.fromOffset(88, 46), Size = UDim2.new(1, -110, 0, 17) })
+	self:_paint(self._subtitle, "TextColor3", "Muted")
+	local minimize = self:_button(header, "−", { Position = UDim2.new(1, -88, 0, 23), TextSize = 22 })
+	local close = self:_button(header, "×", { Position = UDim2.new(1, -48, 0, 23), TextSize = 22 })
+	connect(self, minimize.Activated, function() self:SetVisible(false) end)
+	connect(self, close.Activated, function() self:Destroy() end)
+	local stripe = make("Frame", { Size = UDim2.new(1, 0, 0, 2), Position = UDim2.fromOffset(0, 75), BorderSizePixel = 0 }, panel)
+	self:_paint(stripe, "BackgroundColor3", "Accent")
+	make("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(0.35, 0), NumberSequenceKeypoint.new(1, 0.94) }) }, stripe)
+	for index, width in ipairs({ 22, 12, 17 }) do
+		local drip = make("Frame", { Size = UDim2.fromOffset(width, 8 + index * 3), Position = UDim2.fromOffset(35 + index * 26, 74), BorderSizePixel = 0, ZIndex = 2 }, panel)
+		round(drip, 10); self:_paint(drip, "BackgroundColor3", "Accent")
+	end
+	local sidebar = make("Frame", { Name = "Sidebar", Size = UDim2.new(0, 168, 1, -77), Position = UDim2.fromOffset(0, 77), BorderSizePixel = 0 }, panel)
+	self:_paint(sidebar, "BackgroundColor3", "Sidebar")
+	local navLabel = self:_text(sidebar, "YOUR HIVE", 10, { Position = UDim2.fromOffset(18, 24), Font = Enum.Font.GothamBold })
+	self:_paint(navLabel, "TextColor3", "Muted")
+	self._nav = make("ScrollingFrame", { Name = "Tabs", BackgroundTransparency = 1, BorderSizePixel = 0,
+		Position = UDim2.fromOffset(12, 54), Size = UDim2.new(1, -24, 1, -104), CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 2, ScrollingDirection = Enum.ScrollingDirection.Y }, sidebar)
+	self:_paint(self._nav, "ScrollBarImageColor3", "AccentDark")
+	list(self._nav, 6); pad(self._nav, 1, 1)
+	local footerDot = make("Frame", { Position = UDim2.new(0, 18, 1, -27), Size = UDim2.fromOffset(6, 6), BorderSizePixel = 0 }, sidebar)
+	round(footerDot, 6); self:_paint(footerDot, "BackgroundColor3", "Success")
+	local footer = self:_text(sidebar, "BUILT TO BUZZ  /  " .. Library.Version, 9, { Position = UDim2.new(0, 31, 1, -33), Size = UDim2.new(1, -40, 0, 18) })
+	self:_paint(footer, "TextColor3", "Muted")
+	self._content = make("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(168, 77), Size = UDim2.new(1, -168, 1, -77), ClipsDescendants = true }, panel)
+	self._pageTitle = self:_text(self._content, "", 23, { Position = UDim2.fromOffset(24, 19), Size = UDim2.new(1, -48, 0, 29), Font = Enum.Font.GothamBold })
+	self._pageDescription = self:_text(self._content, "", 11, { Position = UDim2.fromOffset(25, 51), Size = UDim2.new(1, -48, 0, 18) })
+	self:_paint(self._pageDescription, "TextColor3", "Muted")
+	self._pages = make("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(20, 86), Size = UDim2.new(1, -40, 1, -102) }, self._content)
+	local bubble = self:_button(gui, "", { Name = "Reopen", Visible = false, Size = UDim2.fromOffset(60, 60), Position = UDim2.fromOffset(24, 140) })
+	self._bubble = bubble
+	round(bubble, 30); self:_stroke(bubble, "AccentDark")
+	self:_bee(bubble, UDim2.fromOffset(4, 4), 52)
+	local bubbleMoved, bubbleStart, bubblePosition = false, nil, nil
+	bindDrag(self, bubble, function(pos)
+		bubbleMoved = false; bubbleStart = pos; bubblePosition = bubble.AbsolutePosition
+	end, function(pos)
+		if (pos - bubbleStart).Magnitude > 5 then bubbleMoved = true end
+		if bubbleMoved then
+			local viewport = self._viewport
+			local nextPos = bubblePosition + pos - bubbleStart
+			bubble.Position = UDim2.fromOffset(math.clamp(nextPos.X, 0, math.max(0, viewport.X - 60)), math.clamp(nextPos.Y, 0, math.max(0, viewport.Y - 60)))
+		end
+	end)
+	connect(self, bubble.Activated, function() if not bubbleMoved then self:SetVisible(true) end end)
+	local dragStart, rootStart
+	bindDrag(self, dragHandle, function(pos)
+		dragStart = pos
+		rootStart = root.AbsolutePosition + root.AbsoluteSize / 2
+	end, function(pos)
+		local nextPos = rootStart + pos - dragStart
+		self:_position(nextPos)
+	end)
+	self._toastHost = make("Frame", { Name = "Notifications", BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -20, 1, -20), Size = UDim2.new(0, 320, 1, -40), ZIndex = 20 }, gui)
+	self._toastScale = make("UIScale", { Scale = 1 }, self._toastHost)
+	make("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder,
+		VerticalAlignment = Enum.VerticalAlignment.Bottom, HorizontalAlignment = Enum.HorizontalAlignment.Right }, self._toastHost)
+	local function resize()
+		if self._destroyed then return end
+		local camera = workspace.CurrentCamera
+		self._viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+		self._scale.Scale = math.min(self._userScale, math.max(0.1, (self._viewport.X - 24) / self._width), math.max(0.1, (self._viewport.Y - 24) / self._height))
+		self._toastScale.Scale = math.min(1, math.max(0.1, (self._viewport.X - 24) / 320))
+		self:_position(self._center or self._viewport / 2)
+	end
+	self._resize = resize
+	local cameraConnection
+	local function cameraChanged()
+		if cameraConnection then cameraConnection:Disconnect() end
+		local camera = workspace.CurrentCamera
+		if camera then cameraConnection = connect(self, camera:GetPropertyChangedSignal("ViewportSize"), resize) end
+		resize()
+	end
+	connect(self, workspace:GetPropertyChangedSignal("CurrentCamera"), cameraChanged)
+	cameraChanged()
+	connect(self, UserInputService.InputBegan, function(input, processed)
+		if self._destroyed then return end
+		local key = inputKey(input)
+		if self._capture then
+			if input.KeyCode == Enum.KeyCode.Escape then self:_cancelCapture(); return end
+			if not key then return end
+			local element = self._capture
+			self._capture = nil
+			if input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then key = nil end
+			element:Set(key)
+			return
+		end
+		if processed or UserInputService:GetFocusedTextBox() then return end
+		if key and key == self.ToggleKey then self:Toggle(); return end
+		for _, element in ipairs(table.clone(self._keybinds)) do
+			if not element.Disabled and not element._destroyed and element.Frame.Visible and key and key == element.Value and (self._visible or element.Global) then
+				if element.Mode == "Hold" and not element._held then
+					element._held = true; callback(element, element.Callback, true, key)
+				elseif element.Mode == "Toggle" then
+					element.Active = not element.Active; callback(element, element.Callback, element.Active, key)
+				elseif element.Mode == "Press" then callback(element, element.Callback, key) end
+			end
+		end
+	end)
+	connect(self, UserInputService.InputEnded, function(input)
+		for _, element in ipairs(table.clone(self._keybinds)) do
+			if element._held and inputKey(input) == element.Value then
+				element._held = false; callback(element, element.Callback, false, element.Value)
+			end
+		end
+	end)
+	connect(self, UserInputService.WindowFocusReleased, function() self:_finishDrag(); self:_releaseKeys(); self:_cancelCapture() end)
+	connect(self, GuiService.MenuOpened, function() self:_finishDrag(); self:_releaseKeys(); self:_cancelCapture() end)
+	local elapsed = 0
+	connect(self, RunService.RenderStepped, function(dt)
+		if self.ReducedMotion then return end
+		elapsed += dt
+		for _, bee in ipairs(self._bees) do
+			if bee.Root.Parent and bee.Root:IsDescendantOf(gui) and ((self._visible and bee.Root:IsDescendantOf(root)) or (not self._visible and bee.Root:IsDescendantOf(bubble)) or (self._intro and bee.Root:IsDescendantOf(self._intro))) then
+				local wave = math.sin(elapsed * 20 + bee.Phase)
+				bee.Left.Rotation = -28 + wave * 17
+				bee.Right.Rotation = 27 - wave * 17
+				bee.Root.Rotation = math.sin(elapsed * 2 + bee.Phase) * 3
+			end
+		end
+	end)
+	if options.Intro ~= false then self:_showIntro(options.IntroText or "Gathering the good stuff…") end
+	return self
+end
+
+function Window:_position(center)
+	local viewport = self._viewport
+	if not viewport then return end
+	local half = Vector2.new(self._width, self._height) * self._scale.Scale / 2
+	self.Root.Position = UDim2.fromOffset(math.clamp(center.X, half.X + 8, math.max(half.X + 8, viewport.X - half.X - 8)),
+		math.clamp(center.Y, half.Y + 8, math.max(half.Y + 8, viewport.Y - half.Y - 8)))
+	self._center = Vector2.new(self.Root.Position.X.Offset, self.Root.Position.Y.Offset)
+end
+
+function Window:SetTheme(theme)
+	assert(type(theme) == "table", "Theme must be a table")
+	for key, value in pairs(theme) do
+		assert(defaultTheme[key] ~= nil and typeof(value) == "Color3", "Unknown theme key or invalid Color3: " .. tostring(key))
+	end
+	for key, value in pairs(theme) do self.Theme[key] = value end
+	for object, bindings in pairs(self._themeBindings) do
+		if object.Parent then
+			local props = {}
+			for property, key in pairs(bindings) do props[property] = type(key) == "function" and key(self.Theme) or self.Theme[key] end
+			self:_tween(object, props)
+		end
+	end
+	return self
+end
+
+function Window:SetScale(value)
+	assert(type(value) == "number" and value > 0 and value < math.huge, "Scale must be a finite positive number")
+	self._userScale = value
+	self._resize()
+	return self
+end
+
+function Window:SetTitle(title, subtitle)
+	self._title.Text = tostring(title)
+	if subtitle ~= nil then self._subtitle.Text = tostring(subtitle) end
+	return self
+end
+
+function Window:SetVisible(value)
+	if self._destroyed then return self end
+	self._visible = value == true
+	self:_finishDrag(); self:_releaseKeys(); self:_cancelCapture()
+	self._visibilityToken = (self._visibilityToken or 0) + 1
+	local token = self._visibilityToken
+	self._bubble.Visible = not self._visible
+	if self._visible then
+		self.Root.Visible = true
+		self:_tween(self._panel, { GroupTransparency = 0 }, 0.22)
+		self:_tween(self._shadow, { BackgroundTransparency = 0.5 }, 0.22)
+	else
+		self:_tween(self._panel, { GroupTransparency = 1 }, 0.16)
+		self:_tween(self._shadow, { BackgroundTransparency = 1 }, 0.16)
+		self:_delay(self.ReducedMotion and 0 or 0.17, function() if self._visibilityToken == token then self.Root.Visible = false end end)
+	end
+	return self
+end
+
+function Window:Toggle() return self:SetVisible(not self._visible) end
+function Window:IsVisible() return self._visible end
+function Window:Get(flag) local item = self.Elements[flag]; return item and item:Get() end
+
+function Window:_delay(seconds, fn)
+	if self._destroyed then return nil end
+	local thread
+	thread = task.delay(seconds, function()
+		self._tasks[thread] = nil
+		if not self._destroyed then fn() end
+	end)
+	self._tasks[thread] = true
+	return thread
+end
+
+function Window:_showIntro(text)
+	local intro = make("CanvasGroup", { Name = "Intro", Size = UDim2.fromScale(1, 1), BorderSizePixel = 0, ZIndex = 10, Active = true }, self._panel)
+	self._intro = intro
+	self:_paint(intro, "BackgroundColor3", "Background")
+	self:_bee(intro, UDim2.new(0.5, -55, 0.5, -100), 110)
+	self:_text(intro, self._title.Text, 27, { Position = UDim2.new(0, 0, 0.5, 14), TextXAlignment = Enum.TextXAlignment.Center, Font = Enum.Font.GothamBold })
+	local status = self:_text(intro, text, 12, { Position = UDim2.new(0, 0, 0.5, 48), TextXAlignment = Enum.TextXAlignment.Center })
+	self:_paint(status, "TextColor3", "Muted")
+	local track = make("Frame", { Position = UDim2.new(0.5, -100, 0.5, 83), Size = UDim2.fromOffset(200, 4), BorderSizePixel = 0 }, intro)
+	round(track, 4); self:_paint(track, "BackgroundColor3", "Surface")
+	local fill = make("Frame", { Size = UDim2.fromScale(0, 1), BorderSizePixel = 0 }, track)
+	round(fill, 4); self:_paint(fill, "BackgroundColor3", "Accent")
+	self:_tween(fill, { Size = UDim2.fromScale(1, 1) }, 0.8)
+	self:_delay(self.ReducedMotion and 0 or 1, function()
+		self:_tween(intro, { GroupTransparency = 1 }, 0.25)
+		self:_delay(self.ReducedMotion and 0 or 0.27, function() intro:Destroy(); self._intro = nil end)
+	end)
+end
+
+function Window:CreateTab(options)
+	assert(not self._destroyed, "Window has been destroyed")
+	if type(options) == "string" then options = { Name = options } end
+	options = options or {}
+	local tab = setmetatable({ _window = self, _connections = {}, _elements = {}, _order = 0,
+		Name = options.Name or "Tab", Description = options.Description or "Make yourself at home.", _destroyed = false }, Tab)
+	local button = self:_button(self._nav, "", { Name = tab.Name, Size = UDim2.new(1, -2, 0, 42), LayoutOrder = #self.Tabs + 1 }, tab)
+	tab.Button = button
+	self:_paint(button, "BackgroundColor3", function(theme) return self.SelectedTab == tab and theme.SurfaceHover or theme.Sidebar end)
+	tab._marker = make("Frame", { Size = UDim2.fromOffset(3, 18), Position = UDim2.new(0, 0, 0.5, -9), BorderSizePixel = 0, Visible = false }, button)
+	round(tab._marker, 3); self:_paint(tab._marker, "BackgroundColor3", "Accent")
+	local icon = self:_text(button, options.Icon or "⬡", 19, { Position = UDim2.fromOffset(12, 10), Size = UDim2.fromOffset(24, 22), TextXAlignment = Enum.TextXAlignment.Center })
+	self:_paint(icon, "TextColor3", function(theme) return self.SelectedTab == tab and theme.Accent or theme.Muted end)
+	tab._icon = icon
+	tab._label = self:_text(button, tab.Name, 12, { Position = UDim2.fromOffset(44, 12), Size = UDim2.new(1, -52, 0, 18), Font = Enum.Font.GothamMedium })
+	self:_paint(tab._label, "TextColor3", function(theme) return self.SelectedTab == tab and theme.Text or theme.Muted end)
+	local page = make("ScrollingFrame", { Name = tab.Name, BackgroundTransparency = 1, BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1), Visible = false, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3, ScrollingDirection = Enum.ScrollingDirection.Y }, self._pages)
+	tab.Page = page
+	self:_paint(page, "ScrollBarImageColor3", "AccentDark")
+	pad(page, 4, 4); list(page, 9)
+	connect(tab, button.Activated, function() tab:Select() end)
+	connect(tab, button.MouseLeave, function() self:_tween(button, { BackgroundColor3 = self.SelectedTab == tab and self.Theme.SurfaceHover or self.Theme.Sidebar }) end)
+	table.insert(self.Tabs, tab)
+	if not self.SelectedTab then tab:Select() end
+	return tab
+end
+
+function Tab:Select()
+	local window = self._window
+	if self._destroyed or window._destroyed then return self end
+	window:_finishDrag(); window:_releaseKeys(); window:_cancelCapture()
+	window.SelectedTab = self
+	for _, tab in ipairs(window.Tabs) do
+		local selected = tab == self
+		tab.Page.Visible = selected
+		tab._marker.Visible = selected
+		window:_tween(tab.Button, { BackgroundColor3 = selected and window.Theme.SurfaceHover or window.Theme.Sidebar })
+		window:_tween(tab._icon, { TextColor3 = selected and window.Theme.Accent or window.Theme.Muted })
+		window:_tween(tab._label, { TextColor3 = selected and window.Theme.Text or window.Theme.Muted })
+	end
+	window._pageTitle.Text = self.Name
+	window._pageDescription.Text = self.Description
+	self.Page.Position = UDim2.fromOffset(0, window.ReducedMotion and 0 or 8)
+	window:_tween(self.Page, { Position = UDim2.fromOffset(0, 0) }, 0.25)
+	return self
+end
+
+function Tab:_element(options, kind, height)
+	assert(not self._destroyed and not self._window._destroyed, "Tab has been destroyed")
+	options = options or {}
+	local window = self._window
+	local flag = options.Flag
+	assert(flag == nil or (type(flag) == "string" and #flag > 0), "Flag must be a nonempty string")
+	assert(not flag or not window.Elements[flag], "Duplicate flag: " .. tostring(flag))
+	self._order += 1
+	local element = setmetatable({ _window = window, _tab = self, _connections = {}, _destroyed = false,
+		Kind = kind, Flag = flag, Name = options.Name or kind, Description = options.Description,
+		Callback = options.Callback, Disabled = options.Disabled == true, _height = height or 64,
+	}, Element)
+	local row = make("Frame", { Name = kind, BorderSizePixel = 0, Size = UDim2.new(1, -7, 0, height or 64), LayoutOrder = self._order }, self.Page)
+	element.Frame = row
+	round(row, 10); window:_paint(row, "BackgroundColor3", "Surface"); window:_stroke(row)
+	element._title = window:_text(row, element.Name, 13, { Font = Enum.Font.GothamMedium,
+		Position = UDim2.fromOffset(15, options.Description and 13 or 22), Size = UDim2.new(1, -110, 0, 19) })
+	element._description = window:_text(row, options.Description or "", 11, { Position = UDim2.fromOffset(15, 35), Size = UDim2.new(1, -110, 0, 16), Visible = options.Description ~= nil })
+	window:_paint(element._description, "TextColor3", "Muted")
+	table.insert(self._elements, element)
+	if flag then window.Elements[flag] = element end
+	return element
+end
+
+function Element:_value(value, silent)
+	self.Value = type(value) == "table" and table.clone(value) or value
+	if self.Flag then self._window.Flags[self.Flag] = self:Get() end
+	if not silent then callback(self, self.Callback, self:Get()) end
+end
+
+function Element:Get() return type(self.Value) == "table" and table.clone(self.Value) or self.Value end
+function Element:SetCallback(fn) assert(type(fn) == "function" or fn == nil, "Callback must be a function"); self.Callback = fn; return self end
+function Element:SetName(name) self.Name = tostring(name); self._title.Text = self.Name; return self end
+function Element:SetDescription(text)
+	self.Description = text and tostring(text) or nil
+	self._description.Text = self.Description or ""
+	self._description.Visible = self.Description ~= nil
+	self._title.Position = UDim2.fromOffset(15, self.Description and 13 or 22)
+	return self
+end
+function Element:SetVisible(value)
+	self.Frame.Visible = value == true
+	if not value then
+		if self._window._drag and self._window._drag.Owner == self then self._window:_finishDrag() end
+		if self._window._capture == self then self._window:_cancelCapture() end
+		if self._held then self._held = false; callback(self, self.Callback, false, self.Value) end
+	end
+	return self
+end
+function Element:SetDisabled(value)
+	self.Disabled = value == true
+	self._title.TextTransparency = self.Disabled and 0.55 or 0
+	self._description.TextTransparency = self.Disabled and 0.55 or 0
+	if self.Disabled then
+		if self._window._capture == self then self._window:_cancelCapture() end
+		if self._window._drag and self._window._drag.Owner == self then self._window:_finishDrag() end
+		if self._held then self._held = false; callback(self, self.Callback, false, self.Value) end
+	end
+	if self._disable then self._disable(self.Disabled) end
+	return self
+end
+
+function Element:Destroy()
+	if self._destroyed then return end
+	self:SetDisabled(true)
+	self._destroyed = true
+	disconnect(self)
+	local window = self._window
+	if self.Flag then window.Elements[self.Flag] = nil; window.Flags[self.Flag] = nil end
+	local keyIndex = table.find(window._keybinds, self)
+	if keyIndex then table.remove(window._keybinds, keyIndex) end
+	local index = table.find(self._tab._elements, self)
+	if index then table.remove(self._tab._elements, index) end
+	self.Frame:Destroy()
+end
+
+local function finishElement(element, options)
+	element:SetDisabled(element.Disabled)
+	if options.FireOnInit then callback(element, element.Callback, element:Get()) end
+	return element
+end
+
+function Tab:AddToggle(options)
+	options = options or {}
+	local element = self:_element(options, "Toggle")
+	local window = self._window
+	local hit = make("TextButton", { BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), AutoButtonColor = false }, element.Frame)
+	local track = make("Frame", { Size = UDim2.fromOffset(42, 24), Position = UDim2.new(1, -58, 0.5, -12), BorderSizePixel = 0 }, hit)
+	round(track, 20)
+	local knob = make("Frame", { Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(4, 4), BorderSizePixel = 0 }, track)
+	round(knob, 20)
+	window:_paint(track, "BackgroundColor3", function(theme) return element.Value and theme.Accent or theme.Input end)
+	window:_paint(knob, "BackgroundColor3", function(theme) return element.Value and theme.Background or theme.Muted end)
+	function element:Set(value, silent)
+		assert(type(value) == "boolean", "Toggle value must be boolean")
+		if self._destroyed then return self end
+		local changed = self.Value ~= value
+		self:_value(value, true)
+		window:_tween(track, { BackgroundColor3 = value and window.Theme.Accent or window.Theme.Input })
+		window:_tween(knob, { Position = UDim2.fromOffset(value and 22 or 4, 4), BackgroundColor3 = value and window.Theme.Background or window.Theme.Muted }, 0.22)
+		if changed and not silent then callback(self, self.Callback, value) end
+		return self
+	end
+	connect(element, hit.Activated, function() if not element.Disabled then element:Set(not element.Value) end end)
+	element:Set(options.Default == true, true)
+	return finishElement(element, options)
+end
+
+function Tab:AddSlider(options)
+	options = options or {}
+	local min, max, step = options.Min or 0, options.Max or 100, options.Step or 1
+	assert(type(min) == "number" and type(max) == "number" and max > min and min > -math.huge and max < math.huge, "Slider requires finite Min < Max")
+	assert(type(step) == "number" and step > 0 and step < math.huge, "Slider Step must be finite and positive")
+	local element = self:_element(options, "Slider", 94)
+	local window = self._window
+	element.Min, element.Max, element.Step = min, max, step
+	local valueLabel = window:_text(element.Frame, "", 13, { Position = UDim2.new(1, -110, 0, 17), Size = UDim2.fromOffset(94, 20), TextXAlignment = Enum.TextXAlignment.Right, Font = Enum.Font.GothamMedium })
+	window:_paint(valueLabel, "TextColor3", "Accent")
+	local track = make("Frame", { BorderSizePixel = 0, Position = UDim2.new(0, 17, 1, -27), Size = UDim2.new(1, -34, 0, 5) }, element.Frame)
+	round(track, 6); window:_paint(track, "BackgroundColor3", "Input")
+	local fill = make("Frame", { BorderSizePixel = 0, Size = UDim2.fromScale(0, 1) }, track)
+	round(fill, 6); window:_paint(fill, "BackgroundColor3", "Accent")
+	local knob = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(14, 14), BorderSizePixel = 0 }, track)
+	round(knob, 14); window:_paint(knob, "BackgroundColor3", "Accent"); window:_stroke(knob, "Background")
+	local hit = make("TextButton", { BackgroundTransparency = 1, Text = "", Position = UDim2.fromOffset(0, -13), Size = UDim2.new(1, 0, 0, 31), AutoButtonColor = false }, track)
+	local decimals = math.clamp(math.ceil(-math.log10(step)) + 2, 0, 8)
+	local function normalize(value)
+		assert(type(value) == "number" and value == value and math.abs(value) < math.huge, "Slider value must be finite")
+		value = math.clamp(value, min, max)
+		if value == max then return max end
+		local snapped = min + math.floor((value - min) / step + 0.5) * step
+		return math.clamp(tonumber(string.format("%." .. decimals .. "f", snapped)), min, max)
+	end
+	element._validate = normalize
+	function element:Set(value, silent)
+		value = normalize(value)
+		if self._destroyed then return self end
+		local changed = self.Value ~= value
+		self:_value(value, true)
+		local alpha = (value - min) / (max - min)
+		window:_tween(fill, { Size = UDim2.fromScale(alpha, 1) }, 0.09)
+		window:_tween(knob, { Position = UDim2.fromScale(alpha, 0.5) }, 0.09)
+		valueLabel.Text = tostring(value) .. tostring(options.Suffix or "")
+		if changed and not silent then callback(self, self.Callback, value) end
+		return self
+	end
+	bindDrag(element, hit, nil, function(pos)
+		if track.AbsoluteSize.X <= 0 then return end
+		local alpha = math.clamp((pos.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		element:Set(min + (max - min) * alpha)
+	end)
+	element:Set(options.Default or min, true)
+	return finishElement(element, options)
+end
+
+function Tab:AddDropdown(options)
+	options = options or {}
+	local element = self:_element(options, "Dropdown", 100)
+	local window = self._window
+	element.Multi = options.Multi == true
+	element.Options = {}
+	element._optionConnections = {}
+	element._open = false
+	element._title.Size = UDim2.new(1, -30, 0, 19)
+	element._title.Position = UDim2.fromOffset(15, 12)
+	element._description.Size = UDim2.new(1, -30, 0, 16)
+	element._description.Position = UDim2.fromOffset(15, 34)
+	local header = window:_button(element.Frame, "", { Position = UDim2.fromOffset(12, 57), Size = UDim2.new(1, -24, 0, 32) }, element)
+	window:_paint(header, "BackgroundColor3", "Input")
+	local selected = window:_text(header, "", 12, { Position = UDim2.fromOffset(11, 6), Size = UDim2.new(1, -42, 0, 20) })
+	local arrow = window:_text(header, "⌄", 19, { Position = UDim2.new(1, -29, 0, 4), Size = UDim2.fromOffset(20, 23), TextXAlignment = Enum.TextXAlignment.Center })
+	window:_paint(arrow, "TextColor3", "Accent")
+	local body = make("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 96), Size = UDim2.new(1, -24, 0, 208), Visible = false }, element.Frame)
+	element.Frame.ClipsDescendants = true
+	local search = make("TextBox", { PlaceholderText = "Search the hive…", Text = "", ClearTextOnFocus = false,
+		Size = UDim2.new(1, 0, 0, 30), Font = Enum.Font.Gotham, TextSize = 12, BorderSizePixel = 0, TextXAlignment = Enum.TextXAlignment.Left }, body)
+	round(search, 7); pad(search, 10, 0)
+	window:_paint(search, "BackgroundColor3", "Input"); window:_paint(search, "TextColor3", "Text"); window:_paint(search, "PlaceholderColor3", "Muted")
+	local items = make("ScrollingFrame", { BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.fromOffset(0, 37),
+		Size = UDim2.new(1, 0, 0, 163), CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 2,
+		ScrollingDirection = Enum.ScrollingDirection.Y }, body)
+	window:_paint(items, "ScrollBarImageColor3", "AccentDark")
+	list(items, 4); pad(items, 1, 1)
+	local empty = window:_text(items, "No matches. Try another search.", 11, { Size = UDim2.new(1, -6, 0, 32), Visible = false, LayoutOrder = 1000000 })
+	window:_paint(empty, "TextColor3", "Muted")
+	local buttons = {}
+	local function contains(value) return table.find(element.Options, value) ~= nil end
+	local function normalize(value)
+		if element.Multi then
+			assert(type(value) == "table", "Multi dropdown requires an array")
+			local set, output = {}, {}
+			for _, item in ipairs(value) do assert(contains(item), "Unknown dropdown option: " .. tostring(item)); set[item] = true end
+			for _, item in ipairs(element.Options) do if set[item] then table.insert(output, item) end end
+			return output
+		end
+		assert(value == nil or contains(value), "Unknown dropdown option: " .. tostring(value))
+		return value
+	end
+	element._validate = normalize
+	local function isSelected(value)
+		return element.Multi and table.find(element.Value or {}, value) ~= nil or (not element.Multi and element.Value == value)
+	end
+	local function render()
+		selected.Text = element.Multi and (#(element.Value or {}) > 0 and table.concat(element.Value, ", ") or (options.Placeholder or "Choose options")) or (element.Value or options.Placeholder or "Choose an option")
+		for _, entry in ipairs(buttons) do
+			local active = isSelected(entry.Value)
+			entry.Check.Text = active and "●" or "○"
+			window:_tween(entry.Label, { TextColor3 = active and window.Theme.Accent or window.Theme.Text })
+			window:_tween(entry.Button, { BackgroundColor3 = active and window.Theme.SurfaceHover or window.Theme.Input })
+		end
+	end
+	function element:Set(value, silent)
+		value = normalize(value)
+		if self._destroyed then return self end
+		local changed = self.Multi and table.concat(self.Value or {}, "\0") ~= table.concat(value, "\0") or (not self.Multi and self.Value ~= value)
+		self:_value(value, true)
+		render()
+		if changed and not silent then callback(self, self.Callback, self:Get()) end
+		return self
+	end
+	function element:SetOpen(value)
+		if self._destroyed then return self end
+		self._open = value == true and not self.Disabled
+		self._openToken = (self._openToken or 0) + 1
+		local token = self._openToken
+		if self._open then
+			body.Visible = true
+			window:_tween(self.Frame, { Size = UDim2.new(1, -7, 0, 310) }, 0.22)
+		else
+			search:ReleaseFocus()
+			window:_tween(self.Frame, { Size = UDim2.new(1, -7, 0, 100) }, 0.2)
+			window:_delay(window.ReducedMotion and 0 or 0.21, function() if not self._destroyed and self._openToken == token then body.Visible = false end end)
+		end
+		window:_tween(arrow, { Rotation = self._open and 180 or 0 })
+		return self
+	end
+	local function filter()
+		local query = string.lower(search.Text)
+		local count = 0
+		for _, entry in ipairs(buttons) do
+			local matches = string.find(string.lower(entry.Value), query, 1, true) ~= nil
+			entry.Button.Visible = matches
+			if matches then count += 1 end
+		end
+		empty.Visible = count == 0
+		items.CanvasPosition = Vector2.zero
+	end
+	function element:SetOptions(values, silent)
+		assert(type(values) == "table", "Dropdown Options must be an array of strings")
+		local normalized, seen = {}, {}
+		for _, value in ipairs(values) do
+			assert(type(value) == "string", "Dropdown options must be strings")
+			if not seen[value] then seen[value] = true; table.insert(normalized, value) end
+		end
+		for _, connection in ipairs(self._optionConnections) do connection:Disconnect() end
+		table.clear(self._optionConnections)
+		for _, entry in ipairs(buttons) do entry.Button:Destroy() end
+		table.clear(buttons)
+		self.Options = normalized
+		local optionOwner = { _connections = self._optionConnections }
+		for index, value in ipairs(normalized) do
+			local button = window:_button(items, "", { Size = UDim2.new(1, -5, 0, 31), LayoutOrder = index }, optionOwner)
+			local label = window:_text(button, value, 12, { Position = UDim2.fromOffset(10, 6), Size = UDim2.new(1, -42, 0, 20) })
+			local check = window:_text(button, "○", 13, { Position = UDim2.new(1, -27, 0, 6), Size = UDim2.fromOffset(18, 20), TextXAlignment = Enum.TextXAlignment.Center })
+			window:_paint(check, "TextColor3", "Accent")
+			window:_paint(button, "BackgroundColor3", function(theme) return isSelected(value) and theme.SurfaceHover or theme.Input end)
+			window:_paint(label, "TextColor3", function(theme) return isSelected(value) and theme.Accent or theme.Text end)
+			table.insert(buttons, { Value = value, Button = button, Label = label, Check = check })
+			connect(optionOwner, button.MouseLeave, function() window:_tween(button, { BackgroundColor3 = isSelected(value) and window.Theme.SurfaceHover or window.Theme.Input }) end)
+			connect(optionOwner, button.Activated, function()
+				if self.Disabled then return end
+				if self.Multi then
+					local nextValue = self:Get() or {}
+					local found = table.find(nextValue, value)
+					if found then table.remove(nextValue, found) else table.insert(nextValue, value) end
+					self:Set(nextValue)
+				else self:Set(value); self:SetOpen(false) end
+			end)
+		end
+		local nextValue
+		if self.Multi then
+			nextValue = {}
+			for _, value in ipairs(self.Value or {}) do if seen[value] then table.insert(nextValue, value) end end
+		else nextValue = seen[self.Value] and self.Value or nil end
+		self:Set(nextValue, silent)
+		filter()
+		return self
+	end
+	connect(element, search:GetPropertyChangedSignal("Text"), filter)
+	connect(element, header.Activated, function() if not element.Disabled then element:SetOpen(not element._open) end end)
+	connect(element, header.MouseLeave, function() window:_tween(header, { BackgroundColor3 = window.Theme.Input }) end)
+	element._disable = function(disabled) search.TextEditable = not disabled; if disabled then element:SetOpen(false) end end
+	local baseDestroy = element.Destroy
+	function element:Destroy()
+		for _, connection in ipairs(self._optionConnections) do connection:Disconnect() end
+		table.clear(self._optionConnections)
+		baseDestroy(self)
+	end
+	element:SetOptions(options.Options or {}, true)
+	element:Set(options.Default or (element.Multi and {} or nil), true)
+	return finishElement(element, options)
+end
+
+function Tab:AddTextbox(options)
+	options = options or {}
+	local element = self:_element(options, "Textbox", 104)
+	local window = self._window
+	element._title.Size = UDim2.new(1, -30, 0, 19)
+	element._title.Position = UDim2.fromOffset(15, 12)
+	element._description.Size = UDim2.new(1, -30, 0, 16)
+	element._description.Position = UDim2.fromOffset(15, 34)
+	local box = make("TextBox", { Text = "", PlaceholderText = options.Placeholder or "Type something sweet…", ClearTextOnFocus = false,
+		Position = UDim2.fromOffset(12, 58), Size = UDim2.new(1, -24, 0, 33), Font = Enum.Font.Gotham,
+		TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0, TextTruncate = Enum.TextTruncate.AtEnd }, element.Frame)
+	pad(box, 10, 0); round(box, 7)
+	window:_paint(box, "BackgroundColor3", "Input"); window:_paint(box, "TextColor3", "Text"); window:_paint(box, "PlaceholderColor3", "Muted")
+	local stroke = window:_stroke(box)
+	element.Input = box
+	local changing = false
+	local function validate(value)
+		assert(type(value) == "string", "Textbox value must be a string")
+		if options.MaxLength then
+			local length = utf8.len(value)
+			if length and length > options.MaxLength then
+				value = value:sub(1, (utf8.offset(value, options.MaxLength + 1) or (#value + 1)) - 1)
+			end
+		end
+		if options.Numeric and value ~= "" then
+			local number = tonumber(value)
+			assert(number and number == number and math.abs(number) < math.huge, "Enter a finite number")
+		end
+		if options.Validate then
+			local ok, message = options.Validate(value)
+			assert(ok, message or "Invalid text")
+		end
+		return value
+	end
+	if options.MaxLength then assert(type(options.MaxLength) == "number" and options.MaxLength >= 0 and options.MaxLength % 1 == 0, "MaxLength must be a nonnegative integer") end
+	element._validate = validate
+	function element:Set(value, silent)
+		value = validate(value)
+		if self._destroyed then return self end
+		local changed = self.Value ~= value
+		self:_value(value, true)
+		changing = true; box.Text = value; changing = false
+		if changed and not silent then callback(self, self.Callback, value) end
+		return self
+	end
+	local function commit()
+		local ok, value = pcall(validate, box.Text)
+		if ok then element:Set(value) else
+			changing = true; box.Text = element.Value or ""; changing = false
+			window:Notify({ Title = "Check your input", Content = tostring(value):gsub("^.-:%d+: ", ""), Type = "Warning", Duration = 3 })
+		end
+	end
+	connect(element, box.Focused, function() window:_tween(stroke, { Color = window.Theme.AccentDark }) end)
+	connect(element, box.FocusLost, function(enterPressed)
+		window:_tween(stroke, { Color = window.Theme.Border })
+		if not element.Disabled and (not options.EnterOnly or enterPressed) then commit()
+		elseif options.EnterOnly then changing = true; box.Text = element.Value or ""; changing = false end
+	end)
+	if options.Live then
+		connect(element, box:GetPropertyChangedSignal("Text"), function()
+			if changing or element.Disabled then return end
+			local ok, value = pcall(validate, box.Text)
+			if ok then element:Set(value) end
+		end)
+	end
+	element._disable = function(disabled) box.TextEditable = not disabled; if disabled then box:ReleaseFocus() end end
+	element:Set(tostring(options.Default or ""), true)
+	return finishElement(element, options)
+end
+
+function Tab:AddKeybind(options)
+	options = options or {}
+	local mode = options.Mode or "Press"
+	assert(mode == "Press" or mode == "Hold" or mode == "Toggle", "Keybind Mode must be Press, Hold, or Toggle")
+	local element = self:_element(options, "Keybind")
+	local window = self._window
+	element.Mode, element.Global, element.Active = mode, options.Global == true, false
+	element._changedCallback = options.Changed
+	element._title.Size = UDim2.new(1, -150, 0, 19)
+	element._description.Size = UDim2.new(1, -150, 0, 16)
+	local button = window:_button(element.Frame, "", { Position = UDim2.new(1, -130, 0.5, -16), Size = UDim2.fromOffset(114, 32), TextSize = 11 }, element)
+	window:_paint(button, "BackgroundColor3", "Input"); window:_paint(button, "TextColor3", "Accent")
+	window:_stroke(button)
+	element._render = function() button.Text = window._capture == element and "Press a key…" or (element.Value and element.Value.Name or "None") end
+	element._validate = normalizeKey
+	function element:Set(value, silent)
+		value = normalizeKey(value)
+		if self._destroyed then return self end
+		if self._held then self._held = false; callback(self, self.Callback, false, self.Value) end
+		local changed = self.Value ~= value
+		self.Active = false
+		self:_value(value, true)
+		self._render()
+		if changed and not silent then callback(self, options.Changed, value) end
+		return self
+	end
+	function element:SetMode(value)
+		assert(value == "Press" or value == "Hold" or value == "Toggle", "Invalid keybind mode")
+		if self._held then self._held = false; callback(self, self.Callback, false, self.Value) end
+		self.Mode = value; self.Active = false
+		return self
+	end
+	connect(element, button.Activated, function()
+		if element.Disabled then return end
+		window:_cancelCapture(); window:_releaseKeys()
+		window._capture = element
+		element._render()
+	end)
+	connect(element, button.MouseLeave, function() window:_tween(button, { BackgroundColor3 = window.Theme.Input }) end)
+	table.insert(window._keybinds, element)
+	element:Set(options.Default, true)
+	element:SetDisabled(element.Disabled)
+	return element
+end
+
+function Tab:AddButton(options)
+	options = options or {}
+	local element = self:_element(options, "Button")
+	local window = self._window
+	local button = window:_button(element.Frame, options.Text or "Run", { Position = UDim2.new(1, -94, 0.5, -16), Size = UDim2.fromOffset(78, 32), TextSize = 12 }, element)
+	window:_paint(button, "BackgroundColor3", "Accent"); window:_paint(button, "TextColor3", "Background")
+	connect(element, button.MouseEnter, function() window:_tween(button, { BackgroundColor3 = window.Theme.Accent:Lerp(Color3.new(1, 1, 1), 0.15) }) end)
+	connect(element, button.MouseLeave, function() window:_tween(button, { BackgroundColor3 = window.Theme.Accent }) end)
+	connect(element, button.Activated, function()
+		if element.Disabled or element._busy then return end
+		element._busy = true
+		window:_tween(button, { Size = UDim2.fromOffset(74, 30), Position = UDim2.new(1, -92, 0.5, -15) }, 0.08)
+		window:_delay(0.1, function()
+			if not element._destroyed then window:_tween(button, { Size = UDim2.fromOffset(78, 32), Position = UDim2.new(1, -94, 0.5, -16) }, 0.16) end
+		end)
+		callback(element, element.Callback)
+		element._busy = false
+	end)
+	function element:SetText(value) button.Text = tostring(value); return self end
+	return finishElement(element, {})
+end
+
+function Tab:AddLabel(options)
+	if type(options) == "string" then options = { Name = options } end
+	options = options or {}
+	local element = self:_element(options, "Label", 58)
+	element.Frame.AutomaticSize = Enum.AutomaticSize.Y
+	element._title:Destroy(); element._description:Destroy()
+	pad(element.Frame, 15, 12)
+	list(element.Frame, 5)
+	element._title = self._window:_text(element.Frame, options.Name or options.Text or "", 13, { Size = UDim2.new(1, 0, 0, 20), AutomaticSize = Enum.AutomaticSize.Y,
+		TextWrapped = true, TextTruncate = Enum.TextTruncate.None, Font = Enum.Font.GothamMedium, LayoutOrder = 1 })
+	element._description = self._window:_text(element.Frame, options.Description or "", 11, { Size = UDim2.new(1, 0, 0, 16), AutomaticSize = Enum.AutomaticSize.Y,
+		TextWrapped = true, TextTruncate = Enum.TextTruncate.None, Visible = options.Description ~= nil, LayoutOrder = 2 })
+	self._window:_paint(element._description, "TextColor3", "Muted")
+	function element:Set(value) self._title.Text = tostring(value); self.Name = tostring(value); return self end
+	function element:SetDescription(value) self._description.Text = tostring(value or ""); self._description.Visible = value ~= nil; return self end
+	return finishElement(element, {})
+end
+
+function Tab:AddSection(text)
+	local element = self:_element({ Name = tostring(text or "Section") }, "Section", 30)
+	element.Frame.BackgroundTransparency = 1
+	local stroke = element.Frame:FindFirstChildOfClass("UIStroke")
+	if stroke then stroke:Destroy() end
+	element._title.Position = UDim2.fromOffset(3, 8)
+	element._title.Size = UDim2.new(1, -6, 0, 16)
+	element._title.TextSize = 10
+	element._title.Font = Enum.Font.GothamBold
+	self._window:_paint(element._title, "TextColor3", "Muted")
+	return element
+end
+
+function Tab:Destroy()
+	if self._destroyed then return end
+	self._destroyed = true
+	for _, element in ipairs(table.clone(self._elements)) do element:Destroy() end
+	disconnect(self)
+	self.Button:Destroy(); self.Page:Destroy()
+	local window = self._window
+	local index = table.find(window.Tabs, self)
+	if index then table.remove(window.Tabs, index) end
+	if window.SelectedTab == self then
+		window.SelectedTab = nil
+		if window.Tabs[1] then window.Tabs[1]:Select()
+		else window._pageTitle.Text = ""; window._pageDescription.Text = "" end
+	end
+end
+
+local function colorValue(value)
+	if typeof(value) == "Color3" then return value end
+	if type(value) == "string" then
+		local hex = value:gsub("^#", "")
+		assert(#hex == 6 and hex:match("^%x+$"), "Color hex must contain six digits")
+		return Color3.fromRGB(tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16))
+	end
+	error("Color must be a Color3 or six-digit hex string", 3)
+end
+
+function Tab:AddColorPicker(options)
+	options = options or {}
+	local element = self:_element(options, "ColorPicker")
+	local window = self._window
+	element.Frame.ClipsDescendants = true
+	element._open = false
+	local preview = window:_button(element.Frame, "", { Position = UDim2.new(1, -64, 0, 18), Size = UDim2.fromOffset(48, 28) }, element)
+	window:_paint(preview, "BackgroundColor3", function(theme) return element.Value or theme.Accent end)
+	window:_stroke(preview)
+	local body = make("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(15, 72), Size = UDim2.new(1, -30, 0, 188), Visible = false }, element.Frame)
+	local square = make("TextButton", { Text = "", AutoButtonColor = false, BorderSizePixel = 0, Size = UDim2.new(1, -36, 0, 138) }, body)
+	round(square, 7)
+	local white = make("Frame", { BorderSizePixel = 0, BackgroundColor3 = Color3.new(1, 1, 1), Size = UDim2.fromScale(1, 1), Active = false }, square)
+	round(white, 7)
+	make("UIGradient", { Transparency = NumberSequence.new(0, 1) }, white)
+	local black = make("Frame", { BorderSizePixel = 0, BackgroundColor3 = Color3.new(0, 0, 0), Size = UDim2.fromScale(1, 1), Active = false }, square)
+	round(black, 7)
+	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0) }, black)
+	local dot = make("Frame", { Size = UDim2.fromOffset(10, 10), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ZIndex = 3 }, square)
+	round(dot, 10)
+	make("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2 }, dot)
+	local hueBar = make("TextButton", { Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+		Position = UDim2.new(1, -22, 0, 0), Size = UDim2.fromOffset(22, 138) }, body)
+	round(hueBar, 7)
+	local stops = {}
+	for index = 0, 6 do table.insert(stops, ColorSequenceKeypoint.new(index / 6, Color3.fromHSV(index / 6, 1, 1))) end
+	make("UIGradient", { Rotation = 90, Color = ColorSequence.new(stops) }, hueBar)
+	local hueDot = make("Frame", { BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Size = UDim2.new(1, 4, 0, 4), Position = UDim2.fromOffset(-2, 0), AnchorPoint = Vector2.new(0, 0.5) }, hueBar)
+	round(hueDot, 3)
+	local hex = make("TextBox", { Text = "", ClearTextOnFocus = false, Font = Enum.Font.GothamMedium, TextSize = 12,
+		Size = UDim2.new(1, -36, 0, 32), Position = UDim2.fromOffset(0, 151), BorderSizePixel = 0 }, body)
+	round(hex, 7); window:_paint(hex, "BackgroundColor3", "Input"); window:_paint(hex, "TextColor3", "Text")
+	local swatch = make("Frame", { Position = UDim2.new(1, -22, 0, 155), Size = UDim2.fromOffset(22, 24), BorderSizePixel = 0 }, body)
+	round(swatch, 5)
+	local h, s, v = 0, 1, 1
+	local fromPicker = false
+	element._validate = colorValue
+	function element:Set(value, silent)
+		value = colorValue(value)
+		if self._destroyed then return self end
+		local changed = self.Value ~= value
+		if not fromPicker then h, s, v = value:ToHSV() end
+		self:_value(value, true)
+		preview.BackgroundColor3 = value
+		swatch.BackgroundColor3 = value
+		square.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+		dot.Position = UDim2.fromScale(s, 1 - v)
+		hueDot.Position = UDim2.new(0, -2, h, 0)
+		hex.Text = "#" .. value:ToHex():upper()
+		if changed and not silent then callback(self, self.Callback, value) end
+		return self
+	end
+	function element:SetOpen(value)
+		if self._destroyed then return self end
+		self._open = value == true and not self.Disabled
+		self._openToken = (self._openToken or 0) + 1
+		local token = self._openToken
+		if self._open then body.Visible = true
+		else hex:ReleaseFocus() end
+		window:_tween(self.Frame, { Size = UDim2.new(1, -7, 0, self._open and 272 or 64) }, 0.22)
+		if not self._open then window:_delay(window.ReducedMotion and 0 or 0.23, function() if not self._destroyed and self._openToken == token then body.Visible = false end end) end
+		return self
+	end
+	local function updatePicker()
+		fromPicker = true
+		element:Set(Color3.fromHSV(h, s, v))
+		fromPicker = false
+	end
+	bindDrag(element, square, nil, function(pos)
+		if square.AbsoluteSize.X <= 0 or square.AbsoluteSize.Y <= 0 then return end
+		s = math.clamp((pos.X - square.AbsolutePosition.X) / square.AbsoluteSize.X, 0, 1)
+		v = 1 - math.clamp((pos.Y - square.AbsolutePosition.Y) / square.AbsoluteSize.Y, 0, 1)
+		updatePicker()
+	end)
+	bindDrag(element, hueBar, nil, function(pos)
+		if hueBar.AbsoluteSize.Y <= 0 then return end
+		h = math.clamp((pos.Y - hueBar.AbsolutePosition.Y) / hueBar.AbsoluteSize.Y, 0, 1)
+		updatePicker()
+	end)
+	connect(element, preview.Activated, function() if not element.Disabled then element:SetOpen(not element._open) end end)
+	connect(element, preview.MouseEnter, function() window:_tween(preview, { BackgroundColor3 = element.Value }) end)
+	connect(element, preview.MouseLeave, function() window:_tween(preview, { BackgroundColor3 = element.Value }) end)
+	connect(element, hex.FocusLost, function()
+		if element.Disabled then return end
+		local ok, value = pcall(colorValue, hex.Text)
+		if ok then element:Set(value) else hex.Text = "#" .. element.Value:ToHex():upper() end
+	end)
+	element._disable = function(disabled) hex.TextEditable = not disabled; if disabled then element:SetOpen(false) end end
+	element:Set(options.Default or window.Theme.Accent, true)
+	return finishElement(element, options)
+end
+
+function Window:Notify(options)
+	if self._destroyed then return nil end
+	if type(options) == "string" then options = { Content = options } end
+	options = options or {}
+	local duration = tonumber(options.Duration) or 4
+	assert(duration >= 0 and duration < math.huge, "Notification Duration must be a finite nonnegative number")
+	local toast = { _window = self, _connections = {}, _destroyed = false }
+	local slot = make("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(320, 100), LayoutOrder = self._toastOrder or 0 }, self._toastHost)
+	self._toastOrder = (self._toastOrder or 0) + 1
+	local card = make("CanvasGroup", { Size = UDim2.fromScale(1, 1), Position = UDim2.fromOffset(35, 0), GroupTransparency = 1, BorderSizePixel = 0 }, slot)
+	round(card, 11); self:_paint(card, "BackgroundColor3", "Surface"); self:_stroke(card)
+	local color = defaultTheme[options.Type] and options.Type or "Accent"
+	local accent = make("Frame", { Size = UDim2.new(0, 3, 1, -26), Position = UDim2.fromOffset(0, 13), BorderSizePixel = 0 }, card)
+	round(accent, 3); self:_paint(accent, "BackgroundColor3", color)
+	self:_text(card, options.Title or "A little buzz", 13, { Font = Enum.Font.GothamBold, Position = UDim2.fromOffset(16, 14), Size = UDim2.new(1, -57, 0, 20) })
+	self:_text(card, options.Content or "", 11, { Position = UDim2.fromOffset(16, 39), Size = UDim2.new(1, -36, 0, 39), TextWrapped = true, TextTruncate = Enum.TextTruncate.None, TextYAlignment = Enum.TextYAlignment.Top })
+	local close = self:_button(card, "×", { Size = UDim2.fromOffset(24, 24), Position = UDim2.new(1, -34, 0, 10), TextSize = 18 }, toast)
+	local progress = make("Frame", { Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, -2), BorderSizePixel = 0 }, card)
+	self:_paint(progress, "BackgroundColor3", color)
+	local window = self
+	function toast:Close(immediate)
+		if self._destroyed then return end
+		self._destroyed = true
+		disconnect(self)
+		local index = table.find(window._notifications, self)
+		if index then table.remove(window._notifications, index) end
+		if self._timer then
+			window._tasks[self._timer] = nil
+			pcall(task.cancel, self._timer)
+			self._timer = nil
+		end
+		if self._progress then self._progress:Cancel(); self._progress:Destroy() end
+		if immediate or window._destroyed then slot:Destroy(); return end
+		window:_tween(card, { Position = UDim2.fromOffset(35, 0), GroupTransparency = 1 }, 0.18)
+		window:_delay(window.ReducedMotion and 0 or 0.19, function() slot:Destroy() end)
+	end
+	connect(toast, close.Activated, function() toast:Close() end)
+	table.insert(self._notifications, toast)
+	if #self._notifications > 4 then self._notifications[1]:Close(true) end
+	self:_tween(card, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 }, 0.25)
+	if duration > 0 then
+		toast._progress = TweenService:Create(progress, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) })
+		toast._progress:Play()
+		toast._timer = self:_delay(duration, function() toast._timer = nil; toast:Close() end)
+	else progress.Visible = false end
+	return toast
+end
+
+function Window:ExportConfig()
+	assert(not self._destroyed, "Window has been destroyed")
+	local values = {}
+	for flag, element in pairs(self.Elements) do
+		local value = element:Get()
+		if element.Kind == "ColorPicker" then
+			value = { value.R, value.G, value.B }
+		elseif element.Kind == "Keybind" then value = value and value.Name or "None" end
+		if element.Kind == "Toggle" or element.Kind == "Slider" or element.Kind == "Textbox" or element.Kind == "Dropdown" or element.Kind == "ColorPicker" or element.Kind == "Keybind" then
+			values[flag] = { Kind = element.Kind, Value = value, Empty = value == nil or nil }
+		end
+	end
+	return HttpService:JSONEncode({ Version = 1, Values = values })
+end
+
+function Window:LoadConfig(json, options)
+	assert(not self._destroyed, "Window has been destroyed")
+	options = options or {}
+	local ok, data = pcall(function() return HttpService:JSONDecode(json) end)
+	if not ok or type(data) ~= "table" or data.Version ~= 1 or type(data.Values) ~= "table" then return false, "Invalid BeeUI config or unsupported version" end
+	local pending, errors = {}, {}
+	for flag, record in pairs(data.Values) do
+		local element = self.Elements[flag]
+		if element then
+			local valid, value = pcall(function()
+				assert(type(record) == "table" and record.Kind == element.Kind, "Control type does not match")
+				local candidate = record.Value
+				if record.Empty == true then candidate = nil end
+				if element.Kind == "Toggle" then assert(type(candidate) == "boolean", "Toggle requires boolean"); return candidate end
+				if element.Kind == "ColorPicker" then
+					assert(type(candidate) == "table" and #candidate == 3, "Invalid RGB array")
+					for _, channel in ipairs(candidate) do assert(type(channel) == "number" and channel >= 0 and channel <= 1, "Invalid color channel") end
+					candidate = Color3.new(candidate[1], candidate[2], candidate[3])
+				end
+				assert(element._validate, "Control has no saved value")
+				return element._validate(candidate)
+			end)
+			if valid then table.insert(pending, { Element = element, Value = value })
+			else table.insert(errors, tostring(flag) .. ": " .. tostring(value):gsub("^.-:%d+: ", "")) end
+		end
+	end
+	if #errors > 0 then return false, table.concat(errors, "\n") end
+	table.sort(pending, function(a, b) return a.Element.Flag < b.Element.Flag end)
+	local changed = {}
+	for _, entry in ipairs(pending) do
+		local before = entry.Element:Get()
+		entry.Element:Set(entry.Value, true)
+		local after = entry.Element:Get()
+		local differs = before ~= after
+		if type(before) == "table" and type(after) == "table" then differs = table.concat(before, "\0") ~= table.concat(after, "\0") end
+		if differs then table.insert(changed, entry.Element) end
+	end
+	if options.Silent ~= true then
+		for _, element in ipairs(changed) do
+			if element.Kind == "Keybind" then callback(element, element._changedCallback, element.Value)
+			else callback(element, element.Callback, element:Get()) end
+		end
+	end
+	return true
+end
+
+local function fileFunctions()
+	return type(readfile) == "function" and readfile or nil, type(writefile) == "function" and writefile or nil
+end
+
+function Window:SaveConfig(path)
+	assert(type(path) == "string" and #path > 0, "Config path is required")
+	local _, write = fileFunctions()
+	if not write then return false, "File APIs unavailable; use ExportConfig()" end
+	local ok, result = pcall(function() write(path, self:ExportConfig()) end)
+	if ok then return true end
+	return false, tostring(result)
+end
+
+function Window:LoadConfigFile(path, options)
+	assert(type(path) == "string" and #path > 0, "Config path is required")
+	local read = fileFunctions()
+	if not read then return false, "File APIs unavailable; use LoadConfig(json)" end
+	local ok, result = pcall(read, path)
+	if not ok then return false, tostring(result) end
+	return self:LoadConfig(result, options)
+end
+
+function Window:SetReducedMotion(value)
+	self.ReducedMotion = value == true
+	if self.ReducedMotion then
+		for _, bee in ipairs(self._bees) do
+			if bee.Root.Parent then bee.Root.Rotation = 0; bee.Left.Rotation = -28; bee.Right.Rotation = 27 end
+		end
+	end
+	return self
+end
+
+function Window:Destroy(external)
+	if self._destroyed then return end
+	self:_finishDrag(); self:_releaseKeys(); self:_cancelCapture()
+	self._destroyed = true
+	disconnect(self)
+	for thread in pairs(self._tasks) do pcall(task.cancel, thread) end
+	table.clear(self._tasks)
+	for _, toast in ipairs(table.clone(self._notifications)) do toast:Close(true) end
+	for _, tab in ipairs(table.clone(self.Tabs)) do tab:Destroy() end
+	for _, tween in pairs(table.clone(self._tweens)) do tween:Cancel(); tween:Destroy() end
+	table.clear(self._tweens); table.clear(self._themeBindings); table.clear(self._bees)
+	table.clear(self.Flags); table.clear(self.Elements)
+	if not external then self.Gui:Destroy() end
+end
+
+Library.Theme = table.freeze(table.clone(defaultTheme))
+return Library
