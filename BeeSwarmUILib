@@ -5,7 +5,7 @@ local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
 
-local Library = { Version = "1.0.0" }
+local Library = { Version = "1.0.1" }
 local Window = {}
 Window.__index = Window
 local Tab = {}
@@ -102,8 +102,9 @@ local function bindDrag(owner, handle, onStart, onMove, onEnd)
 		active = input
 		owner._window._drag = { Owner = owner, Finish = finish }
 		if owner._tab then scrolling = owner._tab.Page.ScrollingEnabled; owner._tab.Page.ScrollingEnabled = false end
-		if onStart then onStart(pointer(input)) end
-		onMove(pointer(input))
+		local start = pointer(input)
+		if onStart then onStart(start) end
+		onMove(start)
 	end)
 	connect(owner, UserInputService.InputChanged, function(input)
 		if active and (input == active or (active.UserInputType ~= Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.MouseMovement)) then
@@ -179,17 +180,114 @@ function Window:_button(parent, text, props, owner)
 	return button
 end
 
+function Window:_tabIcon(parent, name, color)
+	name = name or "Honeycomb"
+	local aliases = { ["⬡"] = "Honeycomb", ["≋"] = "Sliders", ["✦"] = "Settings" }
+	name = aliases[name] or name
+	local parts = {}
+	if name ~= "Honeycomb" and name ~= "Sliders" and name ~= "Settings" then
+		local icon = self:_text(parent, name, 19, { Position = UDim2.fromOffset(12, 10), Size = UDim2.fromOffset(24, 22), TextXAlignment = Enum.TextXAlignment.Center })
+		self:_paint(icon, "TextColor3", color)
+		return icon, { { Object = icon, Property = "TextColor3" } }
+	end
+	local icon = make("Frame", { Name = "Icon", BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 10), Size = UDim2.fromOffset(24, 22) }, parent)
+	local function bar(x, y, width, height, rotation)
+		local part = make("Frame", { BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, height), Rotation = rotation or 0 }, icon)
+		round(part, 1)
+		self:_paint(part, "BackgroundColor3", color)
+		table.insert(parts, { Object = part, Property = "BackgroundColor3" })
+	end
+	if name == "Honeycomb" then
+		for index = 0, 5 do
+			local a = math.rad(index * 60)
+			local b = math.rad((index + 1) * 60)
+			local first = Vector2.new(math.cos(a), math.sin(a)) * 7.5
+			local second = Vector2.new(math.cos(b), math.sin(b)) * 7.5
+			local middle = (first + second) / 2
+			local edge = second - first
+			bar(12 + middle.X, 11 + middle.Y, edge.Magnitude + 0.5, 1.8, math.deg(math.atan2(edge.Y, edge.X)))
+		end
+	elseif name == "Sliders" then
+		for index, x in ipairs({ 8, 16, 11 }) do
+			local y = 5 + (index - 1) * 6
+			bar(12, y, 17, 1.6)
+			bar(x, y, 4, 5)
+		end
+	else
+		for index = 0, 7 do
+			local angle = math.rad(index * 45)
+			bar(12 + math.cos(angle) * 7, 11 + math.sin(angle) * 7, 4, 3, index * 45)
+		end
+		local ring = make("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(12, 11), Size = UDim2.fromOffset(11, 11) }, icon)
+		round(ring, 11)
+		local stroke = make("UIStroke", { Thickness = 2 }, ring)
+		self:_paint(stroke, "Color", color)
+		table.insert(parts, { Object = stroke, Property = "Color" })
+	end
+	return icon, parts
+end
+
+function Window:_animateBee(bee, elapsed, still)
+	local t = elapsed + bee.Phase
+	local flutter = still and 0 or math.sin(t * 54)
+	bee.Root.Rotation = 0
+	bee.Motion.Position = UDim2.fromOffset(still and 0 or math.sin(t * 1.4) * 0.7, still and 0 or math.sin(t * 2.6) * math.min(4, bee.Size * 0.035))
+	bee.Motion.Rotation = still and 0 or math.sin(t * 1.8) * 3 + math.sin(t * 0.85) * 1.2
+	bee.Left.Rotation = -30 + flutter * 30
+	bee.Right.Rotation = 30 - flutter * 28
+	bee.LeftWing.Size = UDim2.fromScale(3.1 * (still and 1 or 0.78 + math.abs(flutter) * 0.22), 3.9)
+	bee.RightWing.Size = UDim2.fromScale(3 * (still and 1 or 0.8 + math.abs(flutter) * 0.2), 3.8)
+	bee.LeftWing.BackgroundTransparency = still and 0.12 or 0.12 + (1 - math.abs(flutter)) * 0.12
+	bee.RightWing.BackgroundTransparency = still and 0.05 or 0.05 + (1 - math.abs(flutter)) * 0.1
+	local blinkTime = (t + 1.3) % 4.8
+	local blink = not still and blinkTime < 0.15 and 1 - math.sin(blinkTime / 0.15 * math.pi) * 0.93 or 1
+	bee.Eye.Size = UDim2.fromScale(0.065, 0.075 * blink)
+	for index, antenna in ipairs(bee.Antennae) do
+		antenna.Root.Rotation = antenna.Angle + (still and 0 or math.sin(t * 5.3 + index * 1.7) * 6)
+	end
+	for index, mote in ipairs(bee.Pollen) do
+		mote.Visible = not still
+		if not still then
+			local progress = (t * 0.6 + index * 0.5) % 1
+			mote.Position = UDim2.fromScale(0.13 - progress * 0.2, 0.59 - progress * 0.14)
+			mote.BackgroundTransparency = 0.35 + progress * 0.65
+		end
+	end
+end
+
 function Window:_bee(parent, position, size)
 	local bee = make("Frame", { Name = "Bee", BackgroundTransparency = 1, Size = UDim2.fromOffset(size, size), Position = position }, parent)
+	local motion = make("Frame", { Name = "Hover", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, bee)
 	local function part(name, x, y, width, height, color, angle, z)
 		local frame = make("Frame", { Name = name, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(width, height), Rotation = angle or 0, ZIndex = z or 2 }, bee)
+			Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(width, height), Rotation = angle or 0, ZIndex = z or 2 }, motion)
 		round(frame, 100)
 		if typeof(color) == "Color3" then frame.BackgroundColor3 = color else self:_paint(frame, "BackgroundColor3", color) end
 		return frame
 	end
-	local left = part("LeftWing", 0.4, 0.26, 0.31, 0.39, Color3.fromRGB(238, 239, 209), -28, 1)
-	local right = part("RightWing", 0.62, 0.25, 0.3, 0.38, Color3.fromRGB(255, 247, 219), 27, 1)
+	local function wing(name, x, y, width, height, color)
+		local pivot = make("Frame", { Name = name .. "Pivot", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(0.1, 0.1), ZIndex = 1 }, motion)
+		local feather = make("Frame", { Name = name, BorderSizePixel = 0, BackgroundColor3 = color, AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(width * 10, height * 10) }, pivot)
+		round(feather, 100)
+		return pivot, feather
+	end
+	local left, leftWing = wing("LeftWing", 0.4, 0.43, 0.31, 0.39, Color3.fromRGB(238, 239, 209))
+	local right, rightWing = wing("RightWing", 0.6, 0.4, 0.3, 0.38, Color3.fromRGB(255, 247, 219))
+	local antennae = {}
+	for index, positionX in ipairs({ 0.69, 0.78 }) do
+		local pivot = make("Frame", { Name = "Antenna", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(positionX, 0.35), Size = UDim2.fromScale(0.04, 0.04), ZIndex = 1 }, motion)
+		local stem = make("Frame", { BackgroundColor3 = Color3.fromRGB(46, 34, 20), BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(math.max(1, size * 0.022), size * 0.13) }, pivot)
+		round(stem, 4)
+		local tip = make("Frame", { BackgroundColor3 = Color3.fromRGB(46, 34, 20), BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0), Size = UDim2.fromOffset(size * 0.05, size * 0.05) }, stem)
+		round(tip, 100)
+		table.insert(antennae, { Root = pivot, Angle = index == 1 and -24 or 22 })
+	end
 	part("Stinger", 0.17, 0.58, 0.18, 0.12, "Background", 0, 1)
 	local body = part("Body", 0.49, 0.54, 0.72, 0.47, "Accent", -9, 2)
 	body.ClipsDescendants = true
@@ -199,10 +297,21 @@ function Window:_bee(parent, position, size)
 			Position = UDim2.fromScale(0.19 + (index - 1) * 0.25, (1 - height) / 2), Size = UDim2.fromScale(0.13, height), ZIndex = 3 }, body)
 		round(stripe, 100)
 	end
-	part("Eye", 0.72, 0.49, 0.065, 0.075, Color3.fromRGB(46, 34, 20), 0, 4)
-	part("EyeLight", 0.732, 0.477, 0.021, 0.025, Color3.new(1, 1, 1), 0, 5)
+	local highlight = part("Highlight", 0.61, 0.405, 0.18, 0.035, Color3.fromRGB(255, 248, 224), -9, 4)
+	highlight.BackgroundTransparency = 0.55
+	local eye = part("Eye", 0.72, 0.49, 0.065, 0.075, Color3.fromRGB(46, 34, 20), 0, 4)
+	local eyeLight = make("Frame", { Name = "EyeLight", BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+		Position = UDim2.fromScale(0.55, 0.12), Size = UDim2.fromScale(0.3, 0.3), ZIndex = 5 }, eye)
+	round(eyeLight, 100)
 	part("Cheek", 0.75, 0.6, 0.1, 0.06, Color3.fromRGB(244, 144, 78), -9, 4)
-	table.insert(self._bees, { Root = bee, Left = left, Right = right, Phase = #self._bees * 1.8 })
+	local pollen = {}
+	for index = 1, 2 do
+		table.insert(pollen, part("Pollen", 0.1, 0.58, 0.035, 0.035, "Accent", 0, 1))
+	end
+	local animation = { Root = bee, Motion = motion, Left = left, Right = right, LeftWing = leftWing, RightWing = rightWing,
+		Eye = eye, Antennae = antennae, Pollen = pollen, Size = size, Phase = #self._bees * 1.8 }
+	table.insert(self._bees, animation)
+	self:_animateBee(animation, 0, self.ReducedMotion)
 	return bee
 end
 
@@ -318,8 +427,10 @@ function Library:CreateWindow(options)
 	self:_paint(stripe, "BackgroundColor3", "Accent")
 	make("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(0.35, 0), NumberSequenceKeypoint.new(1, 0.94) }) }, stripe)
 	for index, width in ipairs({ 22, 12, 17 }) do
-		local drip = make("Frame", { Size = UDim2.fromOffset(width, 8 + index * 3), Position = UDim2.fromOffset(35 + index * 26, 74), BorderSizePixel = 0, ZIndex = 2 }, panel)
+		local drip = make("Frame", { Name = "HoneyDrip", Size = UDim2.fromOffset(width, 8 + index * 3), Position = UDim2.fromOffset(35 + index * 26, 74), BorderSizePixel = 0, ZIndex = 2 }, panel)
 		round(drip, 10); self:_paint(drip, "BackgroundColor3", "Accent")
+		local neck = make("Frame", { Name = "Neck", Size = UDim2.fromScale(1, 0.5), BorderSizePixel = 0, ZIndex = 2 }, drip)
+		self:_paint(neck, "BackgroundColor3", "Accent")
 	end
 	local sidebar = make("Frame", { Name = "Sidebar", Size = UDim2.new(0, 168, 1, -77), Position = UDim2.fromOffset(0, 77), BorderSizePixel = 0 }, panel)
 	self:_paint(sidebar, "BackgroundColor3", "Sidebar")
@@ -345,7 +456,8 @@ function Library:CreateWindow(options)
 	self:_bee(bubble, UDim2.fromOffset(4, 4), 52)
 	local bubbleMoved, bubbleStart, bubblePosition = false, nil, nil
 	bindDrag(self, bubble, function(pos)
-		bubbleMoved = false; bubbleStart = pos; bubblePosition = bubble.AbsolutePosition
+		bubbleMoved = false; bubbleStart = pos
+		bubblePosition = Vector2.new(bubble.Position.X.Offset, bubble.Position.Y.Offset)
 	end, function(pos)
 		if (pos - bubbleStart).Magnitude > 5 then bubbleMoved = true end
 		if bubbleMoved then
@@ -358,7 +470,7 @@ function Library:CreateWindow(options)
 	local dragStart, rootStart
 	bindDrag(self, dragHandle, function(pos)
 		dragStart = pos
-		rootStart = root.AbsolutePosition + root.AbsoluteSize / 2
+		rootStart = self._center
 	end, function(pos)
 		local nextPos = rootStart + pos - dragStart
 		self:_position(nextPos)
@@ -425,10 +537,7 @@ function Library:CreateWindow(options)
 		elapsed += dt
 		for _, bee in ipairs(self._bees) do
 			if bee.Root.Parent and bee.Root:IsDescendantOf(gui) and ((self._visible and bee.Root:IsDescendantOf(root)) or (not self._visible and bee.Root:IsDescendantOf(bubble)) or (self._intro and bee.Root:IsDescendantOf(self._intro))) then
-				local wave = math.sin(elapsed * 20 + bee.Phase)
-				bee.Left.Rotation = -28 + wave * 17
-				bee.Right.Rotation = 27 - wave * 17
-				bee.Root.Rotation = math.sin(elapsed * 2 + bee.Phase) * 3
+				self:_animateBee(bee, elapsed, false)
 			end
 		end
 	end)
@@ -538,9 +647,7 @@ function Window:CreateTab(options)
 	self:_paint(button, "BackgroundColor3", function(theme) return self.SelectedTab == tab and theme.SurfaceHover or theme.Sidebar end)
 	tab._marker = make("Frame", { Size = UDim2.fromOffset(3, 18), Position = UDim2.new(0, 0, 0.5, -9), BorderSizePixel = 0, Visible = false }, button)
 	round(tab._marker, 3); self:_paint(tab._marker, "BackgroundColor3", "Accent")
-	local icon = self:_text(button, options.Icon or "⬡", 19, { Position = UDim2.fromOffset(12, 10), Size = UDim2.fromOffset(24, 22), TextXAlignment = Enum.TextXAlignment.Center })
-	self:_paint(icon, "TextColor3", function(theme) return self.SelectedTab == tab and theme.Accent or theme.Muted end)
-	tab._icon = icon
+	tab._icon, tab._iconParts = self:_tabIcon(button, options.Icon, function(theme) return self.SelectedTab == tab and theme.Accent or theme.Muted end)
 	tab._label = self:_text(button, tab.Name, 12, { Position = UDim2.fromOffset(44, 12), Size = UDim2.new(1, -52, 0, 18), Font = Enum.Font.GothamMedium })
 	self:_paint(tab._label, "TextColor3", function(theme) return self.SelectedTab == tab and theme.Text or theme.Muted end)
 	local page = make("ScrollingFrame", { Name = tab.Name, BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -566,7 +673,9 @@ function Tab:Select()
 		tab.Page.Visible = selected
 		tab._marker.Visible = selected
 		window:_tween(tab.Button, { BackgroundColor3 = selected and window.Theme.SurfaceHover or window.Theme.Sidebar })
-		window:_tween(tab._icon, { TextColor3 = selected and window.Theme.Accent or window.Theme.Muted })
+		for _, part in ipairs(tab._iconParts) do
+			window:_tween(part.Object, { [part.Property] = selected and window.Theme.Accent or window.Theme.Muted })
+		end
 		window:_tween(tab._label, { TextColor3 = selected and window.Theme.Text or window.Theme.Muted })
 	end
 	window._pageTitle.Text = self.Name
@@ -746,8 +855,12 @@ function Tab:AddDropdown(options)
 	local header = window:_button(element.Frame, "", { Position = UDim2.fromOffset(12, 57), Size = UDim2.new(1, -24, 0, 32) }, element)
 	window:_paint(header, "BackgroundColor3", "Input")
 	local selected = window:_text(header, "", 12, { Position = UDim2.fromOffset(11, 6), Size = UDim2.new(1, -42, 0, 20) })
-	local arrow = window:_text(header, "⌄", 19, { Position = UDim2.new(1, -29, 0, 4), Size = UDim2.fromOffset(20, 23), TextXAlignment = Enum.TextXAlignment.Center })
-	window:_paint(arrow, "TextColor3", "Accent")
+	local arrow = make("Frame", { Name = "Arrow", BackgroundTransparency = 1, Position = UDim2.new(1, -27, 0.5, -4), Size = UDim2.fromOffset(14, 8) }, header)
+	for index, angle in ipairs({ 45, -45 }) do
+		local line = make("Frame", { BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(index == 1 and 0.25 or 0.75, 0.5), Size = UDim2.fromOffset(8, 2), Rotation = angle }, arrow)
+		round(line, 1); window:_paint(line, "BackgroundColor3", "Accent")
+	end
 	local body = make("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 96), Size = UDim2.new(1, -24, 0, 208), Visible = false }, element.Frame)
 	element.Frame.ClipsDescendants = true
 	local search = make("TextBox", { PlaceholderText = "Search the hive…", Text = "", ClearTextOnFocus = false,
@@ -782,7 +895,7 @@ function Tab:AddDropdown(options)
 		selected.Text = element.Multi and (#(element.Value or {}) > 0 and table.concat(element.Value, ", ") or (options.Placeholder or "Choose options")) or (element.Value or options.Placeholder or "Choose an option")
 		for _, entry in ipairs(buttons) do
 			local active = isSelected(entry.Value)
-			entry.Check.Text = active and "●" or "○"
+			entry.Check.Visible = active
 			window:_tween(entry.Label, { TextColor3 = active and window.Theme.Accent or window.Theme.Text })
 			window:_tween(entry.Button, { BackgroundColor3 = active and window.Theme.SurfaceHover or window.Theme.Input })
 		end
@@ -839,8 +952,10 @@ function Tab:AddDropdown(options)
 		for index, value in ipairs(normalized) do
 			local button = window:_button(items, "", { Size = UDim2.new(1, -5, 0, 31), LayoutOrder = index }, optionOwner)
 			local label = window:_text(button, value, 12, { Position = UDim2.fromOffset(10, 6), Size = UDim2.new(1, -42, 0, 20) })
-			local check = window:_text(button, "○", 13, { Position = UDim2.new(1, -27, 0, 6), Size = UDim2.fromOffset(18, 20), TextXAlignment = Enum.TextXAlignment.Center })
-			window:_paint(check, "TextColor3", "Accent")
+			local ring = make("Frame", { Name = "Selection", BackgroundTransparency = 1, Position = UDim2.new(1, -25, 0.5, -6), Size = UDim2.fromOffset(12, 12) }, button)
+			round(ring, 12); window:_stroke(ring, "Accent")
+			local check = make("Frame", { Name = "Selected", BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(6, 6) }, ring)
+			round(check, 6); window:_paint(check, "BackgroundColor3", "Accent")
 			window:_paint(button, "BackgroundColor3", function(theme) return isSelected(value) and theme.SurfaceHover or theme.Input end)
 			window:_paint(label, "TextColor3", function(theme) return isSelected(value) and theme.Accent or theme.Text end)
 			table.insert(buttons, { Value = value, Button = button, Label = label, Check = check })
@@ -1300,7 +1415,7 @@ function Window:SetReducedMotion(value)
 	self.ReducedMotion = value == true
 	if self.ReducedMotion then
 		for _, bee in ipairs(self._bees) do
-			if bee.Root.Parent then bee.Root.Rotation = 0; bee.Left.Rotation = -28; bee.Right.Rotation = 27 end
+			if bee.Root.Parent then self:_animateBee(bee, 0, true) end
 		end
 	end
 	return self
